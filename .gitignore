@@ -1,0 +1,16 @@
+# SwiftPM build output — 4 GB of it. Everything here is reproducible from
+# Package.swift and Package.resolved.
+.build/
+.swiftpm/
+Package.pins
+
+# Xcode, if you open the package in it.
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+
+# The app bundle, wherever it is built.
+AgentVM.app/
+
+.DS_Store
