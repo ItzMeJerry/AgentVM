@@ -15,128 +15,138 @@ struct InspectView: View {
     let instance: AgentVMInstance
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                section("Lifetime", systemImage: "clock.arrow.circlepath") {
-                    Text(instance.lifetimeDescription)
-                    LabeledContent("Main process", value: instance.command.joined(separator: " "))
-                    LabeledContent("Created", value: instance.createdAt.formatted(date: .abbreviated, time: .shortened))
-                    if let started = instance.startedAt {
-                        LabeledContent("Started", value: started.formatted(date: .abbreviated, time: .shortened))
-                    }
+        Form {
+            Section {
+                LabeledContent("Mode", value: instance.mode == .instance ? "Instance" : "Task")
+                LabeledContent("Main process") {
+                    Text(instance.command.joined(separator: " "))
+                        .font(.callout.monospaced())
+                        .textSelection(.enabled)
                 }
-
-                section("Network", systemImage: instance.net == .killswitch ? "lock.shield" : "globe") {
-                    Text(instance.net.summary)
-                    LabeledContent("Posture", value: "\(instance.net.label) — fixed at creation")
-                    LabeledContent("Address", value: instance.ipv4 ?? "none while stopped")
-                    if let networkName = instance.networkName {
-                        LabeledContent("Dedicated network") {
-                            HStack(spacing: 6) {
-                                Text(networkName)
-                                if !model.networkNames.contains(networkName) {
-                                    Text("missing — recreated on start")
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
+                LabeledContent("Created", value: instance.createdAt.formatted(date: .abbreviated, time: .shortened))
+                if let started = instance.startedAt {
+                    LabeledContent("Started", value: started.formatted(date: .abbreviated, time: .shortened))
                 }
-
-                section("Ports", systemImage: "point.3.connected.trianglepath.dotted") {
-                    if instance.ports.isEmpty {
-                        Text("No ports on this Mac forward into the guest.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(instance.ports) { port in
-                            HStack(spacing: 8) {
-                                Image(systemName: port.isLoopback ? "laptopcomputer" : "network")
-                                    .foregroundStyle(port.isLoopback ? Color.secondary : Color.orange)
-                                    .help(port.isLoopback ? "this Mac only" : "reachable from your network")
-                                Text(port.spec)
-                                    .textSelection(.enabled)
-                            }
-                            .font(.system(size: 11.5, design: .monospaced))
-                        }
-                    }
-                    HStack {
-                        Text(instance.canEditPorts
-                             ? "Read when the VM boots; changes apply on the next start."
-                             : "Read when the VM boots. Stop the instance to change them.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button(instance.canEditPorts ? "Edit Ports…" : "Ports…") { model.editingPorts = instance }
-                            .buttonStyle(.glass)
-                            .controlSize(.small)
-                    }
-                }
-
-                section("Mounts", systemImage: "externaldrive") {
-                    if instance.mounts.isEmpty {
-                        Text("No host directories are mounted: the guest sees only its own image.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(instance.mounts) { mount in
-                            HStack(spacing: 8) {
-                                Image(systemName: mount.readOnly ? "lock" : "pencil")
-                                    .foregroundStyle(.secondary)
-                                    .help(mount.readOnly ? "read-only" : "writable")
-                                Text(mount.source)
-                                    .lineLimit(1)
-                                    .truncationMode(.head)
-                                Image(systemName: "arrow.right")
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                                Text(mount.destination)
-                            }
-                            .font(.system(size: 11.5, design: .monospaced))
-                        }
-                        Text("Nothing else on the host is reachable: apple/container grants no ambient access.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                section("Environment", systemImage: "key") {
-                    if instance.envKeys.isEmpty {
-                        Text("No variables were injected.").foregroundStyle(.secondary)
-                    } else {
-                        Text(instance.envKeys.sorted().joined(separator: "   "))
-                            .font(.system(size: 11.5, design: .monospaced))
-                            .textSelection(.enabled)
-                        Text("Names only. Values were baked in at creation and are not read back here.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                section("Platform", systemImage: "cpu") {
-                    LabeledContent("Architecture", value: instance.architecture)
-                    LabeledContent("Rosetta", value: instance.rosetta ? "enabled" : "off")
-                    LabeledContent("Container name", value: instance.fullName)
-                    Text("One Linux kernel per instance, on Virtualization.framework — no kernel shared with the host or with other instances.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            } header: {
+                Text("Lifetime")
+            } footer: {
+                Text(instance.lifetimeDescription)
             }
-            .padding(20)
-            .frame(maxWidth: 760, alignment: .leading)
-        }
-        .frame(maxWidth: .infinity)
-    }
 
-    @ViewBuilder
-    private func section(
-        _ title: String, systemImage: String, @ViewBuilder content: () -> some View
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            Label(title, systemImage: systemImage)
-                .font(.headline)
-            content()
+            Section {
+                LabeledContent(
+                    "Posture", value: instance.net == .killswitch ? "Killswitch, fixed at creation" : "Open, fixed at creation")
+                LabeledContent("Address") {
+                    Text(instance.ipv4 ?? "None while stopped")
+                        .textSelection(.enabled)
+                }
+                if let networkName = instance.networkName {
+                    LabeledContent("Dedicated network") {
+                        Text(
+                            model.networkNames.contains(networkName)
+                                ? networkName : "\(networkName) — missing, recreated on start")
+                    }
+                }
+            } header: {
+                Text("Network")
+            } footer: {
+                Text(instance.net.summary)
+            }
+
+            Section {
+                ForEach(instance.ports) { port in
+                        LabeledContent {
+                            Text(port.spec)
+                                .font(.callout.monospaced())
+                                .textSelection(.enabled)
+                        } label: {
+                            Label(
+                                port.isLoopback ? "This Mac only" : "Your network",
+                                systemImage: port.isLoopback ? "laptopcomputer" : "network")
+                        }
+                }
+                // One row: what's forwarded, and the way to change it.
+                LabeledContent {
+                    Button(instance.canEditPorts ? "Edit Ports…" : "Ports…") { model.editingPorts = instance }
+                } label: {
+                    Text(
+                        instance.ports.isEmpty
+                            ? "No ports on this Mac forward into the guest."
+                            : "\(instance.ports.count) forwarded"
+                    )
+                    .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Ports")
+            } footer: {
+                Text(
+                    instance.canEditPorts
+                        ? "Read when the VM boots; changes apply on the next start."
+                        : "Read when the VM boots. Stop the instance to change them.")
+            }
+
+            Section {
+                if instance.mounts.isEmpty {
+                    Text("No host folders are mounted: the guest sees only its own image.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(instance.mounts) { mount in
+                        LabeledContent {
+                            Text(mount.source)
+                                .lineLimit(1)
+                                .truncationMode(.head)
+                                .textSelection(.enabled)
+                        } label: {
+                            Label(mount.destination, systemImage: mount.readOnly ? "lock" : "pencil")
+                                .help(mount.readOnly ? "Read-only" : "Writable")
+                        }
+                    }
+                }
+            } header: {
+                Text("Mounts")
+            } footer: {
+                Text("Nothing else on the host is reachable: apple/container grants no ambient access.")
+            }
+
+            Section {
+                if instance.envKeys.isEmpty {
+                    Text("No variables were injected.")
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(instance.envKeys.sorted().joined(separator: "   "))
+                        .font(.callout.monospaced())
+                        .textSelection(.enabled)
+                }
+                if model.staleEnvironment.contains(instance.fullName) {
+                    Label(
+                        "The env registry changed after this instance was created. It keeps the environment it was created with.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(.orange)
+                }
+            } header: {
+                Text("Environment")
+            } footer: {
+                Text("Names only. Values were baked in at creation and are not read back here.")
+            }
+
+            Section {
+                LabeledContent("CPUs", value: "\(instance.cpus)")
+                LabeledContent("Memory", value: instance.memoryDescription)
+                LabeledContent("Architecture", value: instance.architecture)
+                LabeledContent("Rosetta", value: instance.rosetta ? "On" : "Off")
+                LabeledContent("Container name") {
+                    Text(instance.fullName)
+                        .textSelection(.enabled)
+                }
+            } header: {
+                Text("Platform")
+            } footer: {
+                Text(
+                    "One Linux kernel per instance, on Virtualization.framework — no kernel shared with the host or with other instances."
+                )
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
+        .formStyle(.grouped)
     }
 }

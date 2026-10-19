@@ -42,6 +42,24 @@ public actor AgentVMEngine {
         public let version: String?
         public let appRoot: String?
         public let message: String?
+        /// The service's build kind, such as `release`.
+        public var build: String? = nil
+        /// Where the service itself is installed.
+        public var installRoot: String? = nil
+
+        /// What `daemonStatus()` reports when the service doesn't answer.
+        public static let notRunning = DaemonStatus(
+            running: false, version: nil, appRoot: nil,
+            message: "The container system service is not running. Start it with `container system start`.")
+
+        /// The release number — `1.3.0` — out of the API server's full version
+        /// string, which also carries its build kind and commit.
+        public var release: String? {
+            guard let version,
+                let range = version.range(of: #"\d+\.\d+(\.\d+)?"#, options: .regularExpression)
+            else { return nil }
+            return String(version[range])
+        }
     }
 
     /// Whether the control plane is up. Replaces `container system status`.
@@ -52,11 +70,11 @@ public actor AgentVMEngine {
                 running: true,
                 version: health.apiServerVersion,
                 appRoot: health.appRoot.path(percentEncoded: false),
-                message: nil)
+                message: nil,
+                build: health.apiServerBuild,
+                installRoot: health.installRoot.path(percentEncoded: false))
         } catch {
-            return DaemonStatus(
-                running: false, version: nil, appRoot: nil,
-                message: "The container system service is not running. Start it with `container system start`.")
+            return .notRunning
         }
     }
 

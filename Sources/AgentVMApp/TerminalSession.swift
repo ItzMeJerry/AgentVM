@@ -56,7 +56,7 @@ final class TerminalSession: ObservableObject, Identifiable {
         self.instanceName = instanceName
         self.command = command
         self.terminalView = AgentVMTerminalView(fontSize: fontSize)
-        terminalView.configureNativeColors()
+        terminalView.applyColors()
         terminalView.terminalDelegate = self
     }
 

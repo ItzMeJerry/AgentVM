@@ -53,9 +53,13 @@ why the three dependencies are pinned exactly, and what to do when a build goes 
 | --- | --- |
 | Two-finger scroll in a session | scrollback, following your fingers line by line; in `less`, `man` or `vim` it scrolls the program, not the scrollback |
 | Pinch, or ⌘+ ⌘− ⌘0 | terminal text size, applied to every session and remembered |
+| View > Sessions as Glass | sessions as panes of Liquid Glass over the blurred desktop (the default), or solid terminals |
 | Two-finger double tap | toggle between normal and large text |
 | Three-finger swipe, or ⇧⌘] ⇧⌘[ | next / previous session (the swipe needs "Swipe between pages" set to three fingers) |
 | ⌘T, ⌘1…⌘9 | new session, jump to a session |
+| ⇧⌘D | the dashboard |
+| Click an instance on the dashboard | its own page of charts; swipe right with two fingers (or ⌘[) to go back, the page following your fingers |
+| Point at a line on the dashboard | the figure as it was then, and how long ago; on an instance's page, on every chart at once |
 | Drag a session's tab onto the terminal | snap it into a split: an edge gives it that half of the pane, the middle swaps or shows it there |
 | Snap Layouts (beside +) | arrange sessions in a ready-made layout, Windows-style: click the zone the focused session goes in |
 | Drag the line between panes | resize them; it snaps to halves, thirds and quarters unless Dividers is set to Free. Double-click to even out |
@@ -78,6 +82,8 @@ The app links `apple/container`'s own client libraries and calls them directly:
 | a shell session | `ContainerClient.createProcess` with a guest pty, stdio over pipes |
 | the Logs tab | `ContainerClient.logs`, the daemon's own log file handles |
 | the status light | `ClientHealthCheck.ping` |
+| the dashboard's figures | `ContainerClient.stats` and `diskUsage`, `ClientDiskUsage.get` |
+| this Mac's CPU, memory and disk | Mach `host_statistics`, `sysctl` and volume resource values, in-process |
 
 `AgentVMKit` is the whole engine and has no UI dependency; `AgentVMApp` is SwiftUI plus
 [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) for the terminal. The package pins
@@ -154,6 +160,33 @@ instance is stopped** by rewriting `config.json` and `runtime-configuration.json
 
 The daemon keeps an in-memory copy of each configuration, so `container inspect` shows the
 old ports until it restarts. The app reads the bundle and shows the ports that apply.
+
+## Dashboard
+
+**Dashboard** — the top of the sidebar, or ⇧⌘D — shows the running instances' CPU, memory,
+network and disk activity, each with its last two minutes drawn as a line, and a row per
+instance with its own figures. Below them is this Mac: CPU, memory and memory pressure, free
+disk space, and what the container service stores. Point at a line to read back that moment.
+
+Click an instance's row and its own page slides in: CPU, memory, network and disk activity
+over the last 2 or 10 minutes, and a ring showing how full its disk is. Swipe right with two
+fingers to go back — the page follows your fingers, as in Safari — or press ⌘[.
+
+How full a disk is comes from the disk itself. Each instance's root filesystem is a sparse
+ext4 image of about 512 GiB; the space it takes on this Mac starts at over a gigabyte of
+journal and inode tables and never shrinks when the guest deletes files, so it says little.
+AgentVM reads the filesystem's own superblock and block-group descriptors from the start of
+the image instead — a few hundred kilobytes — which give exactly what `df /` prints inside
+the guest. While an instance runs, its kernel writes those counts back lazily, so the figure
+trails it by a minute or so.
+
+The instance figures are the daemon's own: `ContainerClient.stats` reads each instance's
+cgroup counters inside its VM — the numbers `container stats` prints — so memory includes the
+guest's file cache, as Linux counts it. This Mac's figures come from the kernel directly, not
+from running `top` or `vm_stat`. Readings are taken while the window is open — every 2
+seconds, or 1, 5 or 10 if you pick that from **Read every** on the dashboard or in Settings —
+and disk use and storage, which take longer to work out, every 20 seconds while the dashboard
+is on screen.
 
 ## Configuration
 

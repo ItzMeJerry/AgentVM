@@ -90,16 +90,13 @@ struct LogsView: View {
             } else {
                 LogTextView(text: tailer.text, follow: $follow)
                     .overlay {
-                        if tailer.text.isEmpty {
-                            Text("No output yet")
-                                .font(.callout)
-                                .foregroundStyle(.tertiary)
-                        }
+                        if tailer.text.isEmpty { emptyLog }
                     }
             }
         }
-        // The controls float over the log as glass; the text runs under them.
-        .overlay(alignment: .top) { controls }
+        // The controls are a bar over the log: the text scrolls under them,
+        // softened by the scroll edge effect so they stay legible.
+        .safeAreaBar(edge: .top) { controls }
         .overlay(alignment: .bottomTrailing) { jumpToEnd }
         .animation(.bouncy(duration: 0.35), value: follow)
         .task(id: "\(instance.fullName)-\(showingBoot)") {
@@ -109,29 +106,54 @@ struct LogsView: View {
         .onDisappear { tailer.close() }
     }
 
+    /// An instance's main process is the keepalive, which never prints: say so,
+    /// rather than promise output that won't come.
+    private var emptyLog: some View {
+        Group {
+            if showingBoot {
+                ContentUnavailableView(
+                    "No Boot Log Yet", systemImage: "text.alignleft",
+                    description: Text("The VM's boot messages appear here once it starts."))
+            } else if instance.mode == .instance {
+                ContentUnavailableView(
+                    "Nothing Printed", systemImage: "text.alignleft",
+                    description: Text(
+                        "An instance's main process only keeps it alive, so it prints nothing. What your shells print is in Sessions."
+                    ))
+            } else {
+                ContentUnavailableView(
+                    "No Output Yet", systemImage: "text.alignleft",
+                    description: Text("What the task's command prints appears here."))
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
     private var controls: some View {
         HStack {
-            GlassSegmented(
-                selection: $showingBoot,
-                options: [(false, "Output"), (true, "Boot log")])
-                .help("The instance's own output, or the VM's boot log")
+            Picker("Log", selection: $showingBoot) {
+                Text("Output").tag(false)
+                Text("Boot Log").tag(true)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .help("The instance's own output, or the VM's boot log")
             Spacer()
             Button {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(tailer.text, forType: .string)
             } label: {
                 Label("Copy All", systemImage: "doc.on.doc")
-                    .labelStyle(.iconOnly)
-                    .frame(width: 16, height: 16)
             }
+            .labelStyle(.iconOnly)
             .buttonStyle(.glass)
             .buttonBorderShape(.circle)
-            .controlSize(.large)
             .disabled(tailer.text.isEmpty)
             .help("Copy the whole log")
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 10)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
     }
 
     @ViewBuilder
@@ -148,123 +170,6 @@ struct LogsView: View {
             .padding(18)
             .transition(.scale(scale: 0.6).combined(with: .opacity))
         }
-    }
-}
-
-/// A segmented switch that behaves like the window toolbar's: one capsule of
-/// glass, the chosen segment a lighter capsule. Press and hold it and it lifts
-/// into a glass lens you can drag to another segment; let go and it settles
-/// on the nearest one. A tap on another segment slides it there.
-struct GlassSegmented<Value: Hashable>: View {
-    @Binding var selection: Value
-    let options: [(Value, String)]
-    /// Equal segments, like the toolbar's Sessions / Logs / Inspect switch.
-    var segmentWidth: CGFloat = 86
-
-    /// Where the thumb's centre is while it's held; nil when it's at rest.
-    @State private var dragCenter: CGFloat?
-    /// A segment pressed but not yet released, other than the selected one.
-    @State private var pressed: Int?
-    @State private var hovered: Int?
-
-    private let height: CGFloat = 28
-    private let inset: CGFloat = 3
-
-    private var selectedIndex: Int { options.firstIndex { $0.0 == selection } ?? 0 }
-    private var holding: Bool { dragCenter != nil }
-    /// The segment the thumb is over, which is the one that reads as chosen.
-    private var litIndex: Int { dragCenter.map(index(at:)) ?? selectedIndex }
-
-    private func center(of index: Int) -> CGFloat { segmentWidth * (CGFloat(index) + 0.5) }
-    private func index(at x: CGFloat) -> Int {
-        min(max(Int((x / segmentWidth).rounded(.down)), 0), options.count - 1)
-    }
-
-    var body: some View {
-        ZStack(alignment: .leading) {
-            if let wash = pressed ?? hovered, wash != selectedIndex, !holding {
-                Capsule()
-                    .fill(.primary.opacity(pressed == wash ? 0.08 : 0.04))
-                    .frame(width: segmentWidth, height: height)
-                    .offset(x: center(of: wash) - segmentWidth / 2)
-            }
-            thumb
-            HStack(spacing: 0) {
-                ForEach(options.indices, id: \.self) { index in
-                    Text(options[index].1)
-                        .font(.system(size: 13))
-                        .foregroundStyle(index == litIndex ? .primary : .secondary)
-                        .lineLimit(1)
-                        .frame(width: segmentWidth, height: height)
-                }
-            }
-            .allowsHitTesting(false)
-        }
-        .frame(width: segmentWidth * CGFloat(options.count), height: height)
-        .contentShape(Capsule())
-        .gesture(drag)
-        .onContinuousHover { phase in
-            if case .active(let location) = phase {
-                hovered = index(at: location.x)
-            } else {
-                hovered = nil
-            }
-        }
-        .padding(inset)
-        .glassEffect(.regular.interactive(), in: .capsule)
-        .animation(.snappy(duration: 0.28), value: selection)
-        .animation(.interactiveSpring(response: 0.22, dampingFraction: 0.82), value: dragCenter)
-        .animation(.easeOut(duration: 0.12), value: hovered)
-        .animation(.easeOut(duration: 0.1), value: pressed)
-        .accessibilityRepresentation {
-            Picker("", selection: $selection) {
-                ForEach(options.indices, id: \.self) { index in
-                    Text(options[index].1).tag(options[index].0)
-                }
-            }
-            .pickerStyle(.segmented)
-        }
-    }
-
-    private var thumb: some View {
-        Capsule()
-            .fill(.primary.opacity(holding ? 0.05 : 0.12))
-            .frame(width: segmentWidth, height: height)
-            // Held, the thumb is a lens of glass lifted off the track.
-            .glassEffect(holding ? .clear.interactive() : .identity, in: .capsule)
-            .scaleEffect(holding ? CGSize(width: 1.08, height: 1.22) : CGSize(width: 1, height: 1))
-            .shadow(color: .black.opacity(holding ? 0.18 : 0), radius: 8, y: 2)
-            .offset(x: (dragCenter ?? center(of: selectedIndex)) - segmentWidth / 2)
-    }
-
-    private var drag: some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { gesture in
-                let start = index(at: gesture.startLocation.x)
-                if start == selectedIndex || holding {
-                    // Holding the thumb: it follows the pointer, kept on the track.
-                    let half = segmentWidth / 2
-                    let limit = segmentWidth * CGFloat(options.count) - half
-                    dragCenter = min(max(center(of: start) + gesture.translation.width, half), limit)
-                } else if abs(gesture.translation.width) > 6 {
-                    // Dragged from another segment: pick the thumb up from there.
-                    pressed = nil
-                    let half = segmentWidth / 2
-                    let limit = segmentWidth * CGFloat(options.count) - half
-                    dragCenter = min(max(gesture.location.x, half), limit)
-                } else {
-                    pressed = start
-                }
-            }
-            .onEnded { gesture in
-                if let dragCenter {
-                    selection = options[index(at: dragCenter)].0
-                } else if let pressed, index(at: gesture.location.x) == pressed {
-                    selection = options[pressed].0
-                }
-                dragCenter = nil
-                pressed = nil
-            }
     }
 }
 

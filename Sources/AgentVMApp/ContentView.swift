@@ -20,7 +20,9 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 240, ideal: 270, max: 340)
         } detail: {
             Group {
-                if let instance = model.selectedInstance {
+                if model.showingDashboard {
+                    DashboardScreen(monitor: model.resources, showingNewInstance: $showingNewInstance)
+                } else if let instance = model.selectedInstance {
                     InstanceDetailView(instance: instance)
                 } else {
                     EmptyStateView(showingNewInstance: $showingNewInstance)
@@ -30,6 +32,15 @@ struct ContentView: View {
         .task {
             model.startPolling()
         }
+        // Sampled while the window is open, so the dashboard opens onto
+        // history rather than an empty chart.
+        .onAppear { model.resources.begin(model) }
+        .onDisappear { model.resources.end() }
+        #if DEBUG
+            .task {
+                if let directory = UITour.directory { await UITour.run(model: model, in: directory) }
+            }
+        #endif
         .sheet(isPresented: $showingNewInstance) {
             NewInstanceSheet()
                 .environmentObject(model)
@@ -102,19 +113,11 @@ struct EmptyStateView: View {
     @Binding var showingNewInstance: Bool
 
     var body: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "shippingbox")
-                .font(.system(size: 46, weight: .light))
-                .foregroundStyle(.tertiary)
-            Text("No instance selected")
-                .font(.title3.weight(.medium))
-            Text(
-                "An instance is a Linux VM with its own kernel. It sees only the directories you mount, and runs until you stop it."
-            )
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: 380)
+        ContentUnavailableView {
+            Label("No Instance Selected", systemImage: "shippingbox")
+        } description: {
+            Text("A Linux VM with its own kernel, seeing only the folders you mount. It runs until you stop it.")
+        } actions: {
             Button("New Instance…") { showingNewInstance = true }
                 .buttonStyle(.glassProminent)
                 .controlSize(.large)

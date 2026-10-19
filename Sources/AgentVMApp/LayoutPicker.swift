@@ -27,8 +27,8 @@ struct LayoutPicker: View {
                     .foregroundStyle(.secondary)
             }
             LazyVGrid(
-                columns: Array(repeating: GridItem(.fixed(96), spacing: 12), count: 4), alignment: .leading,
-                spacing: 12
+                columns: Array(repeating: GridItem(.fixed(96), spacing: 10), count: 4), alignment: .leading,
+                spacing: 10
             ) {
                 ForEach(LayoutTemplate.allCases) { template in
                     TemplateTile(template: template, isCurrent: template == current) { zone in
@@ -60,7 +60,8 @@ struct LayoutPicker: View {
     }
 }
 
-/// One template, drawn as its zones. Each zone is its own target.
+/// One template, drawn as its zones — no caption, as in Windows; its name is
+/// the tile's tooltip. Each zone is its own target.
 private struct TemplateTile: View {
     let template: LayoutTemplate
     let isCurrent: Bool
@@ -71,42 +72,35 @@ private struct TemplateTile: View {
     private static let size = CGSize(width: 88, height: 56)
 
     var body: some View {
-        VStack(spacing: 4) {
-            ZStack(alignment: .topLeading) {
-                ForEach(Array(template.zones.enumerated()), id: \.offset) { index, zone in
-                    let rect = CGRect(
-                        x: zone.minX * Self.size.width, y: zone.minY * Self.size.height,
-                        width: zone.width * Self.size.width, height: zone.height * Self.size.height
-                    )
-                    .insetBy(dx: 1.5, dy: 1.5)
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(hovered == index ? Color.accentColor : Color.secondary.opacity(0.28))
-                        .frame(width: rect.width, height: rect.height)
-                        .position(x: rect.midX, y: rect.midY)
-                        .contentShape(Rectangle())
-                        .onHover { inside in
-                            if inside { hovered = index } else if hovered == index { hovered = nil }
-                        }
-                        .onTapGesture { choose(index) }
-                        .accessibilityElement()
-                        .accessibilityLabel("\(template.title), zone \(index + 1)")
-                        .accessibilityAddTraits(.isButton)
-                        .accessibilityAction { choose(index) }
-                }
+        ZStack(alignment: .topLeading) {
+            ForEach(Array(template.zones.enumerated()), id: \.offset) { index, zone in
+                let rect = CGRect(
+                    x: zone.minX * Self.size.width, y: zone.minY * Self.size.height,
+                    width: zone.width * Self.size.width, height: zone.height * Self.size.height
+                )
+                .insetBy(dx: 1.5, dy: 1.5)
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(hovered == index ? Color.accentColor : Color.secondary.opacity(0.28))
+                    .frame(width: rect.width, height: rect.height)
+                    .position(x: rect.midX, y: rect.midY)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        if inside { hovered = index } else if hovered == index { hovered = nil }
+                    }
+                    .onTapGesture { choose(index) }
+                    .accessibilityElement()
+                    .accessibilityLabel("\(template.title), zone \(index + 1)")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { choose(index) }
             }
-            .frame(width: Self.size.width, height: Self.size.height)
-            .padding(4)
-            .background {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(
-                        isCurrent ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: isCurrent ? 2 : 1)
-            }
-            Text(template.title)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .lineLimit(2)
-                .frame(width: 96)
         }
+        .frame(width: Self.size.width, height: Self.size.height)
+        .padding(4)
+        .background {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(
+                    isCurrent ? Color.accentColor : Color.secondary.opacity(0.3), lineWidth: isCurrent ? 2 : 1)
+        }
+        .help(template.title)
     }
 }

@@ -17,7 +17,13 @@ import SwiftUI
 final class AppModel: ObservableObject {
     @Published var config: AgentVMConfig
     @Published var instances: [AgentVMInstance] = []
-    @Published var selection: String?
+    @Published var selection: String? {
+        // Leaving the dashboard closes the instance page over it, so coming
+        // back starts from the overview.
+        didSet { if selection != Self.dashboardID, dashboardInstance != nil { dashboardInstance = nil } }
+    }
+    /// The instance whose charts are open over the dashboard.
+    @Published var dashboardInstance: String?
     @Published var daemon: AgentVMEngine.DaemonStatus?
     @Published var networkNames: Set<String> = []
 
@@ -36,9 +42,27 @@ final class AppModel: ObservableObject {
     /// Whether pane dividers snap to standard sizes (the default) or move
     /// freely. Remembered across launches.
     @Published var paneResizeMode: ResizeMode {
-        didSet { UserDefaults.standard.set(paneResizeMode.rawValue, forKey: Self.resizeModeKey) }
+        didSet { if Self.remembersPreferences { UserDefaults.standard.set(paneResizeMode.rawValue, forKey: Self.resizeModeKey) } }
     }
     private static let resizeModeKey = "paneResizeMode"
+    /// How often the dashboard reads each instance and this Mac, in seconds.
+    /// Remembered across launches.
+    @Published var samplingInterval: TimeInterval {
+        didSet {
+            if Self.remembersPreferences { UserDefaults.standard.set(samplingInterval, forKey: Self.samplingIntervalKey) }
+            if samplingInterval != oldValue { resources.intervalChanged(self) }
+        }
+    }
+    private static let samplingIntervalKey = "samplingInterval"
+    /// Shell sessions as panes of Liquid Glass over the desktop, or solid
+    /// terminals. Remembered across launches.
+    @Published var glassSessions: Bool {
+        didSet {
+            if Self.remembersPreferences { UserDefaults.standard.set(glassSessions, forKey: Self.glassSessionsKey) }
+            for session in sessions.values.joined() { session.terminalView.isGlass = glassSessions }
+        }
+    }
+    private static let glassSessionsKey = "glassSessions"
     /// Instances whose baked-in environment predates the current registry.
     @Published var staleEnvironment: Set<String> = []
     /// The instance a Delete is waiting on confirmation for, from wherever it
@@ -50,14 +74,42 @@ final class AppModel: ObservableObject {
     /// others behind. Remembered across launches.
     @Published var terminalFontSize: CGFloat {
         didSet {
-            UserDefaults.standard.set(Double(terminalFontSize), forKey: Self.fontSizeKey)
+            if Self.remembersPreferences { UserDefaults.standard.set(Double(terminalFontSize), forKey: Self.fontSizeKey) }
             for session in sessions.values.joined() { session.terminalView.applyFontSize(terminalFontSize) }
         }
     }
     private static let fontSizeKey = "terminalFontSize"
 
     let engine = AgentVMEngine.shared
+    /// The dashboard's readings, taken only while it's on screen.
+    let resources = ResourceMonitor()
     private var refreshTask: Task<Void, Never>?
+
+    /// The sidebar's Dashboard row, in the same selection as the instances.
+    /// A container name can't start with `#`, so it never matches one.
+    static let dashboardID = "#dashboard"
+
+    var showingDashboard: Bool { selection == Self.dashboardID }
+
+    /// Slides an instance's charts in over the dashboard.
+    func openDashboardPage(_ name: String) {
+        withAnimation(Self.pageAnimation) { dashboardInstance = name }
+    }
+
+    /// Back to the dashboard: the page slides off the way it came. A swipe
+    /// that has already carried it off closes it without sliding it again.
+    func closeDashboardPage(animated: Bool = true) {
+        guard dashboardInstance != nil else { return }
+        if animated {
+            withAnimation(Self.pageAnimation) { dashboardInstance = nil }
+        } else {
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) { dashboardInstance = nil }
+        }
+    }
+
+    static let pageAnimation = Animation.smooth(duration: 0.3)
 
     struct AppAlert: Identifiable {
         let id = UUID()
@@ -65,11 +117,25 @@ final class AppModel: ObservableObject {
         let message: String
     }
 
+    /// Whether preferences are read and written. Not during the UI tour: it
+    /// runs with the defaults, so its pictures don't depend on whoever ran
+    /// it, and nothing it changes outlives it.
+    private static var remembersPreferences: Bool {
+        #if DEBUG
+            UITour.directory == nil
+        #else
+            true
+        #endif
+    }
+
     init() {
         config = (try? AgentVMConfig.load()) ?? AgentVMConfig()
-        let stored = UserDefaults.standard.double(forKey: Self.fontSizeKey)
+        let defaults = Self.remembersPreferences ? UserDefaults.standard : nil
+        let stored = defaults?.double(forKey: Self.fontSizeKey) ?? 0
         terminalFontSize = stored > 0 ? CGFloat(stored) : AgentVMTerminalView.defaultFontSize
-        paneResizeMode = ResizeMode(rawValue: UserDefaults.standard.string(forKey: Self.resizeModeKey) ?? "") ?? .snap
+        paneResizeMode = ResizeMode(rawValue: defaults?.string(forKey: Self.resizeModeKey) ?? "") ?? .snap
+        samplingInterval = SamplingInterval.validated(defaults?.double(forKey: Self.samplingIntervalKey) ?? 0)
+        glassSessions = defaults?.object(forKey: Self.glassSessionsKey) as? Bool ?? true
     }
 
     var selectedInstance: AgentVMInstance? {
@@ -110,7 +176,10 @@ final class AppModel: ObservableObject {
             lastRefreshError = nil
             networkNames = (try? await engine.agentVMNetworkNames(config: config)) ?? []
             recomputeStaleEnvironment()
-            if let selection, !instances.contains(where: { $0.fullName == selection }) {
+            if let name = dashboardInstance, !instances.contains(where: { $0.fullName == name }) {
+                dashboardInstance = nil
+            }
+            if let selection, selection != Self.dashboardID, !instances.contains(where: { $0.fullName == selection }) {
                 self.selection = instances.first?.fullName
             }
             if selection == nil { selection = instances.first?.fullName }
@@ -262,6 +331,7 @@ final class AppModel: ObservableObject {
         }
         let name = instance.fullName
         let session = TerminalSession(instanceName: name, command: command, fontSize: terminalFontSize)
+        session.terminalView.isGlass = glassSessions
         let id = session.id
         session.terminalView.onFontSizeRequest = { [weak self] size in self?.setTerminalFontSize(size) }
         session.terminalView.onSwipe = { [weak self] offset in self?.selectAdjacentSession(offset, in: name) }
@@ -385,7 +455,7 @@ final class AppModel: ObservableObject {
         guard var layout = layouts[name],
             layout.moveDivider(
                 divider.id, to: boundary, mode: paneResizeMode, length: divider.length,
-                minimumSize: PaneMetrics.minimumSize, gap: PaneMetrics.gap)
+                minimumSize: PaneMetrics.minimumSize, gap: PaneMetrics.gap(glass: glassSessions))
         else { return }
         layouts[name] = layout
     }

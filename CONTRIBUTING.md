@@ -73,6 +73,22 @@ again even when a test fails. Run it before a pull request that touches
 `AgentVMEngine`, and say in the pull request which daemon version you ran it
 against.
 
+## Seeing the interface
+
+A debug build can photograph its own main screens, for reviewing a change to
+the interface without clicking through it:
+
+```sh
+bash Scripts/build-app.sh debug
+AGENTVM_UI_TOUR=/tmp/agentvm-tour .build/AgentVM.app/Contents/MacOS/AgentVM
+```
+
+It works with throwaway `agentvmtour-` instances and a made-up env registry, so
+real instances and secrets never appear; it saves a PNG per screen, deletes
+what it made and quits. Add `AGENTVM_UI_TOUR_APPEARANCE=light` (or `dark`) to
+see it in the other appearance without changing the system's. Release builds
+leave it out.
+
 ## Style
 
 Match the file you're in. Across the codebase:
@@ -87,6 +103,13 @@ Match the file you're in. Across the codebase:
   what to do about it. They are shown to people, not logged.
 - UI strings are plain: "Stop the instance to change them", not "Operation not
   permitted in current state".
+- Liquid Glass follows Apple's [Adopting Liquid
+  Glass](https://developer.apple.com/documentation/technologyoverviews/adopting-liquid-glass):
+  controls and navigation are glass — system components first, `.glass` and
+  `.glassProminent` buttons, `ToolbarSpacer` groups, `safeAreaBar` for custom
+  bars — and content stays content, with no glass on glass. Shell sessions are
+  the one exception, by choice and behind a setting: panes of glass over the
+  desktop, with the text solid.
 
 `swift-format` ships with the toolchain if you want it; there is no enforced
 configuration and no formatting CI.

@@ -32,6 +32,34 @@ final class AgentVMTerminalView: TerminalView {
 
     private var pendingMagnification: CGFloat = 0
 
+    /// The default background is see-through, for a pane of glass behind the
+    /// terminal. Text, the caret, selections and cells with a colour of their
+    /// own stay solid, as with Terminal's background opacity.
+    var isGlass = false {
+        didSet {
+            guard isGlass != oldValue else { return }
+            // Resolved against this view's own appearance: outside drawing,
+            // the current one can be another — a dark background behind
+            // light-mode text.
+            effectiveAppearance.performAsCurrentDrawingAppearance { applyColors() }
+            // The margin around the terminal is drawn by its container.
+            superview?.needsDisplay = true
+            needsDisplay = true
+        }
+    }
+
+    /// SwiftTerm's colours for the current appearance, at the opacity the
+    /// pane wants.
+    func applyColors() {
+        configureNativeColors()
+        backgroundOpacity = isGlass ? 0 : 1
+        // The full accent rather than SwiftTerm's pale selection colour,
+        // which all but vanishes on light glass; the letter under it in the
+        // colour the system draws on the accent.
+        caretColor = .controlAccentColor
+        caretTextColor = .alternateSelectedControlTextColor
+    }
+
     init(fontSize: CGFloat) {
         super.init(
             frame: CGRect(x: 0, y: 0, width: 640, height: 400),
@@ -82,20 +110,23 @@ final class AgentVMTerminalView: TerminalView {
 
     private func makeContextMenu() -> NSMenu {
         let menu = NSMenu()
-        func item(_ title: String, _ action: Selector, _ key: String = "") -> NSMenuItem {
+        // Copy, Paste and Select All use the standard selectors, so the
+        // system gives them its own icons; the rest name theirs.
+        func item(_ title: String, _ action: Selector, _ key: String = "", symbol: String? = nil) -> NSMenuItem {
             let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
             item.target = self
+            if let symbol { item.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) }
             return item
         }
         menu.addItem(item("Copy", #selector(copy(_:)), "c"))
         menu.addItem(item("Paste", #selector(paste(_:)), "v"))
         menu.addItem(item("Select All", #selector(selectAll(_:)), "a"))
         menu.addItem(.separator())
-        menu.addItem(item("Clear Scrollback", #selector(clearScrollbackAction(_:))))
+        menu.addItem(item("Clear Scrollback", #selector(clearScrollbackAction(_:)), symbol: "eraser"))
         menu.addItem(.separator())
-        menu.addItem(item("Bigger", #selector(biggerAction(_:)), "+"))
-        menu.addItem(item("Smaller", #selector(smallerAction(_:)), "-"))
-        menu.addItem(item("Actual Size", #selector(actualSizeAction(_:)), "0"))
+        menu.addItem(item("Bigger", #selector(biggerAction(_:)), "+", symbol: "textformat.size.larger"))
+        menu.addItem(item("Smaller", #selector(smallerAction(_:)), "-", symbol: "textformat.size.smaller"))
+        menu.addItem(item("Actual Size", #selector(actualSizeAction(_:)), "0", symbol: "textformat.size"))
         return menu
     }
 
@@ -123,7 +154,7 @@ final class AgentVMTerminalView: TerminalView {
     // light and dark has to set them again.
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        effectiveAppearance.performAsCurrentDrawingAppearance { configureNativeColors() }
+        effectiveAppearance.performAsCurrentDrawingAppearance { applyColors() }
         needsDisplay = true
     }
 

@@ -52,6 +52,9 @@ let package = Package(
                 .product(name: "ContainerizationOCI", package: "containerization"),
                 .product(name: "ContainerizationOS", package: "containerization"),
                 .product(name: "ContainerizationExtras", package: "containerization"),
+                // The ext4 superblock type, for reading how full an instance's
+                // disk is from its image.
+                .product(name: "ContainerizationEXT4", package: "containerization"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "SystemPackage", package: "swift-system"),
             ],
@@ -77,7 +80,13 @@ let package = Package(
         // mount and name validation — against temporary directories only.
         .testTarget(
             name: "AgentVMKitTests",
-            dependencies: ["AgentVMKit"],
+            dependencies: [
+                "AgentVMKit",
+                // The daemon's own ext4 formatter, to make real disk images to
+                // read back.
+                .product(name: "ContainerizationEXT4", package: "containerization"),
+                .product(name: "ContainerizationArchive", package: "containerization"),
+            ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         // Every split-pane rule, including a randomized run of thousands of

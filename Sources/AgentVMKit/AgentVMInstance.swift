@@ -35,7 +35,22 @@ public struct AgentVMInstance: Identifiable, Sendable, Equatable {
 
     public var id: String { fullName }
 
+    /// The image as people type it: `alpine:3.20`, not
+    /// `docker.io/library/alpine:3.20`.
+    public var imageDisplayName: String { Self.displayName(ofImage: image) }
+
+    static func displayName(ofImage reference: String) -> String {
+        // Docker Hub's own shorthand: official images drop both parts,
+        // everyone else's drop only the registry.
+        for prefix in ["docker.io/library/", "index.docker.io/library/", "docker.io/", "index.docker.io/"]
+        where reference.hasPrefix(prefix) {
+            return String(reference.dropFirst(prefix.count))
+        }
+        return reference
+    }
+
     public var isRunning: Bool { state == .running }
+    public var isStopped: Bool { state == .stopped }
 
     /// "running", "stopped", "stopping".
     public var stateLabel: String { state.rawValue }

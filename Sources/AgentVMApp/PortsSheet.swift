@@ -30,39 +30,26 @@ struct PortsSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Ports").font(.title2.weight(.semibold))
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("Ports").font(.title3.weight(.semibold))
                 Text(live.shortName).font(.title3).foregroundStyle(.secondary)
                 Spacer()
             }
             .padding(.horizontal, 20)
-            .padding(.top, 18)
-            .padding(.bottom, 12)
+            .padding(.top, 16)
+            .padding(.bottom, 4)
 
-            Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Forward a port on this Mac to a port inside the guest. Ports are read when the VM boots, so they can change only while the instance is stopped. A port with no address listens on this Mac only.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    if !live.canEditPorts { stopBanner }
-
-                    table
-                        .disabled(!live.canEditPorts || saving)
-
-                    notes
-                }
-                .padding(20)
+            Form {
+                if !live.canEditPorts { stopSection }
+                portsSection
             }
-            .frame(height: 360)
-
-            Divider()
-            footer
+            .formStyle(.grouped)
+            // A bar the form scrolls under, not a section behind a rule; the
+            // firmer edge keeps buttons legible over a long list of ports.
+            .safeAreaBar(edge: .bottom) { footer }
+            .scrollEdgeEffectStyle(.hard, for: .bottom)
         }
-        .frame(width: 600)
+        .frame(width: 600, height: 470)
         .onAppear {
             original = live.ports
             rows = live.ports.map(PortRow.init)
@@ -75,63 +62,68 @@ struct PortsSheet: View {
 
     // MARK: - Parts
 
-    private var stopBanner: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "lock.fill").foregroundStyle(.secondary)
-            Text(live.isRunning
-                 ? "\(live.shortName) is running. Stop it to change its ports; its sessions end."
-                 : "\(live.shortName) is \(live.stateLabel). Ports can change once it has stopped.")
-                .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer()
-            if live.isRunning {
-                Button("Stop") { Task { await model.stop(live) } }
-                    .buttonStyle(.glass)
-                    .disabled(model.busy != nil)
+    private var stopSection: some View {
+        Section {
+            HStack(spacing: 10) {
+                Label(
+                    live.isRunning
+                        ? "\(live.shortName) is running. Stop it to change its ports; its sessions end."
+                        : "\(live.shortName) is \(live.stateLabel). Ports can change once it has stopped.",
+                    systemImage: "lock.fill")
+                Spacer()
+                if live.isRunning {
+                    Button("Stop") { Task { await model.stop(live) } }
+                        .disabled(model.busy != nil)
+                }
             }
         }
-        .padding(12)
-        .glassEffect(.regular.tint(.orange.opacity(0.15)), in: .rect(cornerRadius: 12))
     }
 
-    private var table: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Text("Host address").frame(width: 130, alignment: .leading)
-                Text("Host port").frame(width: 92, alignment: .leading)
-                Spacer().frame(width: 14)
-                Text("Guest port").frame(width: 92, alignment: .leading)
-                Text("Protocol")
+    private var portsSection: some View {
+        Section {
+            if !rows.isEmpty {
+                HStack(spacing: 6) {
+                    Text("Address").frame(width: 130, alignment: .leading)
+                    Text("Port on this Mac").frame(width: 112, alignment: .leading)
+                    Spacer().frame(width: 14)
+                    Text("Guest port").frame(width: 92, alignment: .leading)
+                    Text("Protocol")
+                    Spacer(minLength: 0)
+                }
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
             }
-            .font(.caption.weight(.medium))
-            .foregroundStyle(.secondary)
-
             ForEach($rows) { $row in
                 PortRowView(row: $row) {
                     rows.removeAll { $0.id == row.id }
                 }
             }
-
             if rows.isEmpty {
-                Text("No ports are published. The host reaches an open instance at its IP address either way.")
-                    .font(.callout)
+                Text("No ports are published. Your Mac reaches an open instance at its IP address either way.")
                     .foregroundStyle(.secondary)
             }
-
             Button {
                 rows.append(PortRow())
             } label: {
-                Label("Add port", systemImage: "plus")
+                Label("Add Port", systemImage: "plus")
             }
             .buttonStyle(.borderless)
             .disabled(rows.count >= PortMapping.limit)
+        } header: {
+            Text("Forwarded Ports")
+        } footer: {
+            notes
         }
+        .disabled(!live.canEditPorts || saving)
     }
 
     @ViewBuilder
     private var notes: some View {
         let mappings = rows.compactMap { try? $0.mapping() }
         VStack(alignment: .leading, spacing: 6) {
+            Text(
+                "A port on this Mac forwards to a port inside the guest. Ports are read when the VM boots, so they change only while the instance is stopped. With no address, a port listens on this Mac only."
+            )
             if mappings.contains(where: { !$0.isLoopback }) {
                 Label(
                     "A port on an address other than 127.0.0.1 is reachable from other machines on your network.",
@@ -155,8 +147,6 @@ struct PortsSheet: View {
                     systemImage: "info.circle")
             }
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
     }
 
     private var footer: some View {
@@ -277,7 +267,7 @@ private struct PortRowView: View {
             TextField(PortMapping.defaultHostAddress, text: $row.address)
                 .frame(width: 130)
             TextField("8080", text: $row.hostPort)
-                .frame(width: 92)
+                .frame(width: 112)
             Image(systemName: "arrow.right")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)

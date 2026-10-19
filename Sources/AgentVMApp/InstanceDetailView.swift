@@ -24,17 +24,20 @@ struct InstanceDetailView: View {
     @State private var tab: Tab = .sessions
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-
+        Group {
             switch tab {
             case .sessions: SessionsView(instance: instance)
             case .logs: LogsView(instance: instance)
             case .inspect: InspectView(instance: instance)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
+        // The window's own title says which instance this is and how it stands,
+        // so the terminals get the space a header would take. Inspect has the
+        // rest.
+        .navigationTitle(instance.shortName)
+        .navigationSubtitle(subtitle)
         // The controls live in the toolbar, which the system renders as
         // Liquid Glass floating over the content.
         .toolbar {
@@ -95,102 +98,20 @@ struct InstanceDetailView: View {
         .onChange(of: model.sessions[instance.fullName]?.count ?? 0) { old, new in
             if new > old { tab = .sessions }
         }
-    }
-
-    private var portsSummary: String {
-        switch instance.ports.count {
-        case 0: "none"
-        case 1: instance.ports[0].shortDescription
-        default: "\(instance.ports[0].shortDescription) +\(instance.ports.count - 1)"
-        }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text(instance.shortName)
-                    .font(.system(size: 22, weight: .semibold))
-                GlassEffectContainer(spacing: 6) {
-                    HStack(spacing: 6) {
-                        StatePill(state: instance.stateLabel)
-                        if instance.net == .killswitch {
-                            Label("killswitch", systemImage: "lock.shield.fill")
-                                .font(.caption.weight(.medium))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .foregroundStyle(.orange)
-                                .glassEffect(.regular.tint(.orange.opacity(0.25)), in: .capsule)
-                                .help(NetPosture.killswitch.summary)
-                        }
-                    }
-                }
-                .animation(.bouncy, value: instance.stateLabel)
-                Spacer()
+        #if DEBUG
+            .onReceive(NotificationCenter.default.publisher(for: UITour.showTab)) { note in
+                if let name = note.object as? String, let shown = Tab(rawValue: name) { tab = shown }
             }
-
-            HStack(spacing: 18) {
-                Fact(label: "Image", value: instance.image)
-                Fact(label: "Mode", value: instance.mode.rawValue, help: instance.lifetimeDescription)
-                Fact(label: "Network", value: instance.net.label, help: instance.net.summary)
-                Fact(label: "IP", value: instance.ipv4 ?? "—",
-                     help: instance.ipv4 == nil ? "A stopped instance has no VM: no IP, no route, no resolver." : nil)
-                Fact(label: "Ports", value: portsSummary, help: instance.ports.map(\.spec).joined(separator: "\n"))
-                Fact(label: "Resources", value: "\(instance.cpus) CPU · \(instance.memoryDescription)")
-            }
-            .font(.callout)
-
-            if model.staleEnvironment.contains(instance.fullName) {
-                Label(
-                    "The env registry changed after this instance was created — it keeps the environment baked in at creation.",
-                    systemImage: "exclamationmark.triangle.fill"
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 16)
-    }
-}
-
-struct StatePill: View {
-    let state: String
-
-    var body: some View {
-        HStack(spacing: 5) {
-            StateDot(state: state)
-            Text(state)
-        }
-        .font(.caption.weight(.medium))
-        .padding(.horizontal, 8)
-        .padding(.vertical, 3)
-        .glassEffect(.regular.tint(tint), in: .capsule)
+        #endif
     }
 
-    private var tint: Color? {
-        switch state {
-        case "running": .green.opacity(0.22)
-        case "stopping": .orange.opacity(0.22)
-        default: nil
-        }
-    }
-}
-
-struct Fact: View {
-    let label: String
-    let value: String
-    var help: String? = nil
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(label.uppercased())
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(.tertiary)
-            Text(value)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .textSelection(.enabled)
-        }
-        .help(help ?? value)
+    /// State, posture when it's the killswitch, image, and address while there
+    /// is one: what you'd otherwise look for in a header.
+    private var subtitle: String {
+        var parts = [instance.stateLabel]
+        if instance.net == .killswitch { parts.append("killswitch") }
+        parts.append(instance.imageDisplayName)
+        if let address = instance.ipv4 { parts.append(address) }
+        return parts.joined(separator: " · ")
     }
 }

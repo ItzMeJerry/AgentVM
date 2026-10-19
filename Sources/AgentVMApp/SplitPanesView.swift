@@ -16,8 +16,14 @@ import SwiftUI
 
 /// The sizes the split-pane UI and the layout model agree on.
 enum PaneMetrics {
-    /// The line between two panes.
-    static let gap = 1.0
+    /// The space between two panes: a hairline between solid ones, a margin
+    /// of backdrop between panes of glass.
+    static func gap(glass: Bool) -> Double { glass ? 8 : 1 }
+    /// Around the panes of glass, so they float clear of the window's edges.
+    static let glassMargin = 8.0
+    /// The smallest a glass pane's corners get; near the window's own
+    /// corners they follow its curve.
+    static let glassCornerRadius = 12.0
     /// The smallest a pane may get, header included: about 20 columns by 5 rows
     /// at the default text size.
     static let minimumSize = CGSize(width: 160, height: 100)
@@ -66,44 +72,66 @@ struct PaneArea: View {
     var body: some View {
         GeometryReader { geometry in
             let bounds = CGRect(origin: .zero, size: geometry.size)
-            let frames = layout.frames(in: bounds, gap: PaneMetrics.gap)
+            let frames = layout.frames(in: bounds, gap: PaneMetrics.gap(glass: model.glassSessions))
             let hidden = sessions.filter { !layout.contains(session: $0.id) }
-            ZStack(alignment: .topLeading) {
-                ForEach(layout.leaves, id: \.self) { content in
-                    if let frame = frames[content] {
-                        PaneView(
-                            instance: instance,
-                            content: content,
-                            session: content.sessionID.flatMap { id in sessions.first { $0.id == id } },
-                            isFocused: layout.focused == content,
-                            showsHeader: layout.isSplit,
-                            hiddenSessions: hidden,
-                            drag: drag)
-                        .frame(width: frame.width, height: frame.height)
-                        .position(x: frame.midX, y: frame.midY)
+            // One container for all the panes of glass: it renders them
+            // together, as Apple advises, and lets them morph as the split
+            // changes. No spacing, so panes a gap apart stay apart.
+            GlassEffectContainer(spacing: 0) {
+                ZStack(alignment: .topLeading) {
+                    ForEach(layout.leaves, id: \.self) { content in
+                        if let frame = frames[content] {
+                            PaneView(
+                                instance: instance,
+                                content: content,
+                                session: content.sessionID.flatMap { id in sessions.first { $0.id == id } },
+                                isFocused: layout.focused == content,
+                                showsHeader: layout.isSplit,
+                                hiddenSessions: hidden,
+                                drag: drag)
+                            .frame(width: frame.width, height: frame.height)
+                            .position(x: frame.midX, y: frame.midY)
+                        }
                     }
-                }
-                ForEach(layout.dividers(in: bounds, gap: PaneMetrics.gap), id: \.id) { divider in
-                    PaneDividerHandle(
-                        divider: divider,
-                        move: { model.moveDivider(divider, to: $0, in: instance.fullName) },
-                        equalize: {
-                            withAnimation(.snappy(duration: 0.2)) {
-                                model.equalizeSplit(at: divider.id.path, in: instance.fullName)
-                            }
-                        })
-                }
-                if let dropPreview {
-                    DropHighlight()
-                        .frame(width: dropPreview.width, height: dropPreview.height)
-                        .position(x: dropPreview.midX, y: dropPreview.midY)
-                        .animation(.snappy(duration: 0.15), value: dropPreview)
+                    ForEach(layout.dividers(in: bounds, gap: PaneMetrics.gap(glass: model.glassSessions)), id: \.id) {
+                        divider in
+                        PaneDividerHandle(
+                            divider: divider,
+                            move: { model.moveDivider(divider, to: $0, in: instance.fullName) },
+                            equalize: {
+                                withAnimation(.snappy(duration: 0.2)) {
+                                    model.equalizeSplit(at: divider.id.path, in: instance.fullName)
+                                }
+                            })
+                    }
+                    if let dropPreview {
+                        DropHighlight()
+                            .frame(width: dropPreview.width, height: dropPreview.height)
+                            .position(x: dropPreview.midX, y: dropPreview.midY)
+                            .animation(.snappy(duration: 0.15), value: dropPreview)
+                    }
                 }
             }
         }
-        // The gap between panes shows through as a separator line.
-        .background(Color(nsColor: .separatorColor))
+        // Between solid panes the gap shows through as a separator line;
+        // between panes of glass, the backdrop does.
+        .background(model.glassSessions ? Color.clear : Color(nsColor: .separatorColor))
     }
+}
+
+/// What's behind the window, blurred: the standard macOS material for a
+/// background in the content layer, and what the panes of glass refract.
+/// Reduce Transparency makes it opaque.
+struct WindowBackdrop: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let view = NSVisualEffectView()
+        view.blendingMode = .behindWindow
+        view.material = .underWindowBackground
+        view.state = .followsWindowActiveState
+        return view
+    }
+
+    func updateNSView(_ view: NSVisualEffectView, context: Context) {}
 }
 
 private struct PaneView: View {
@@ -117,7 +145,14 @@ private struct PaneView: View {
 
     @EnvironmentObject private var model: AppModel
 
+    /// Concentric with the window where a pane meets its corners, and never
+    /// tighter than the minimum elsewhere.
+    private var shape: ConcentricRectangle {
+        ConcentricRectangle(corners: .concentric(minimum: .fixed(PaneMetrics.glassCornerRadius)))
+    }
+
     var body: some View {
+        let glass = model.glassSessions
         VStack(spacing: 0) {
             if showsHeader {
                 PaneHeader(
@@ -130,11 +165,24 @@ private struct PaneView: View {
                 EmptyPane(instance: instance, content: content, hiddenSessions: hiddenSessions)
             }
         }
+        .clipShape(glass ? AnyShape(shape) : AnyShape(Rectangle()))
+        // A pane of glass under the terminal; in a split, the focused one is
+        // tinted with the accent, as Apple suggests for prominence.
+        .glassEffect(
+            glass ? (showsHeader && isFocused ? .regular.tint(Color.accentColor.opacity(0.1)) : .regular) : .identity,
+            in: shape
+        )
         .overlay {
             if showsHeader && isFocused {
-                Rectangle()
-                    .strokeBorder(Color.accentColor.opacity(0.65), lineWidth: 1.5)
-                    .allowsHitTesting(false)
+                if glass {
+                    shape
+                        .stroke(Color.accentColor.opacity(0.5), lineWidth: 1)
+                        .allowsHitTesting(false)
+                } else {
+                    Rectangle()
+                        .strokeBorder(Color.accentColor.opacity(0.65), lineWidth: 1.5)
+                        .allowsHitTesting(false)
+                }
             }
         }
     }
@@ -164,7 +212,8 @@ private struct PaneHeader: View {
             Button {
                 withAnimation(.snappy(duration: 0.25)) { model.removePane(content, in: instance.fullName) }
             } label: {
-                Image(systemName: "xmark")
+                Label(session == nil ? "Remove Pane" : "Remove from Split", systemImage: "xmark")
+                    .labelStyle(.iconOnly)
                     .font(.system(size: 8, weight: .bold))
                     .frame(width: 14, height: 14)
                     .contentShape(Rectangle())
@@ -173,9 +222,13 @@ private struct PaneHeader: View {
             .foregroundStyle(.secondary)
             .help(session == nil ? "Remove this pane" : "Remove from split — the session stays a tab")
         }
-        .padding(.horizontal, 8)
+        .padding(.horizontal, model.glassSessions ? 12 : 8)
         .frame(height: PaneMetrics.headerHeight)
-        .background(isFocused ? Color.accentColor.opacity(0.14) : Color(nsColor: .windowBackgroundColor))
+        // On glass the strip is part of the pane, whose tint marks the focus.
+        .background(
+            model.glassSessions
+                ? Color.clear
+                : isFocused ? Color.accentColor.opacity(0.14) : Color(nsColor: .windowBackgroundColor))
         .contentShape(Rectangle())
         .onTapGesture { model.focusPane(content, in: instance.fullName) }
         .gesture(
@@ -249,7 +302,7 @@ private struct EmptyPane: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(nsColor: .textBackgroundColor))
+        .background(model.glassSessions ? Color.clear : Color(nsColor: .textBackgroundColor))
         .contentShape(Rectangle())
         .onTapGesture { model.focusPane(content, in: instance.fullName) }
     }

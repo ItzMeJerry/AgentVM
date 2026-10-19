@@ -47,6 +47,27 @@ struct HelpView: View {
             detail: "Prune removes every AgentVM instance and its network, and nothing else. Refresh re-reads the list from the container service."),
     ]
 
+    private static let dashboard = [
+        Entry(
+            symbol: "gauge.with.dots.needle.33percent", name: "Dashboard", shortcut: "⇧⌘D",
+            detail: "The top row of the sidebar. CPU, memory, network and disk activity for the running instances, with the last two minutes drawn as a line; each instance's figures in a table below; and this Mac's CPU, memory pressure, free disk space and what the container service stores. Readings are taken while AgentVM's window is open: every 2 seconds, or as often as Read every says — on the dashboard, or in Settings > Dashboard."),
+        Entry(
+            symbol: "chart.xyaxis.line", name: "An instance's charts", shortcut: nil,
+            detail: "Click an instance's row for its own page: CPU, memory, network and disk activity over the last 2 or 10 minutes, and a ring for how full its disk is — what df inside it would say. Right-click a row to open the instance itself, start or stop it, or open a shell."),
+        Entry(
+            symbol: "hand.point.up.left", name: "Reading back", shortcut: nil,
+            detail: "Point at a line to see the figure as it was at that moment, and how long ago. On an instance's page every chart marks the same moment."),
+        Entry(
+            symbol: "chevron.backward", name: "Back", shortcut: "⌘[",
+            detail: "Swipe right with two fingers and the page follows them back to the dashboard, as in Safari — or with three, if that's how Swipe between pages is set in Trackpad settings. The back button in the toolbar and a mouse's back button do the same."),
+    ]
+
+    private static let sessionLook = [
+        Entry(
+            symbol: "square.on.square.intersection.dashed", name: "Panes of glass", shortcut: nil,
+            detail: "Each session floats on Liquid Glass, with the desktop blurred behind it; in a split, the focused pane is tinted. Only the terminal's background turns to glass — text, the cursor and coloured output stay solid. Turn it off in View > Sessions as Glass or Settings > Sessions for solid terminals."),
+    ]
+
     private static let splitPanes = [
         Entry(
             symbol: "rectangle.split.2x1", name: "Split panes", shortcut: nil,
@@ -67,6 +88,8 @@ struct HelpView: View {
             VStack(alignment: .leading, spacing: 18) {
                 section("Instance toolbar", Self.instanceButtons)
                 section("Sidebar toolbar", Self.sidebarButtons)
+                section("Dashboard", Self.dashboard)
+                section("Sessions", Self.sessionLook)
                 section("Split panes", Self.splitPanes)
             }
             .padding(20)
@@ -107,7 +130,7 @@ struct HelpCommands: Commands {
 
     var body: some Commands {
         CommandGroup(replacing: .help) {
-            Button("AgentVM Help") { openWindow(id: "help") }
+            Button("AgentVM Help", systemImage: "questionmark.circle") { openWindow(id: "help") }
                 .keyboardShortcut("?")
         }
     }

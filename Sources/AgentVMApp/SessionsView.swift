@@ -51,7 +51,7 @@ struct SessionsView: View {
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: {
                         tabBarFrame = $0
                     }
-                Divider()
+                // No rule under the tabs: their glass sets them apart.
                 PaneArea(
                     instance: instance, layout: layout, sessions: sessions,
                     dropPreview: drag.flatMap { preview(for: $0, in: layout) },
@@ -59,11 +59,17 @@ struct SessionsView: View {
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: {
                         paneAreaFrame = $0
                     }
+                    // Glass panes float: a margin of the backdrop around them.
+                    .padding(.horizontal, model.glassSessions ? PaneMetrics.glassMargin : 0)
+                    .padding(.bottom, model.glassSessions ? PaneMetrics.glassMargin : 0)
             } else {
                 emptyState
             }
         }
         .coordinateSpace(.named(Self.space))
+        .background {
+            if model.glassSessions { WindowBackdrop() }
+        }
         .overlay(alignment: .topLeading) {
             if let drag {
                 DragLabel(title: drag.title)
@@ -87,7 +93,8 @@ struct SessionsView: View {
             let point = CGPoint(x: drag.location.x - paneAreaFrame.minX, y: drag.location.y - paneAreaFrame.minY)
             guard
                 let target = layout.dropTarget(
-                    at: point, in: CGRect(origin: .zero, size: paneAreaFrame.size), gap: PaneMetrics.gap,
+                    at: point, in: CGRect(origin: .zero, size: paneAreaFrame.size),
+                    gap: PaneMetrics.gap(glass: model.glassSessions),
                     minimumSize: PaneMetrics.minimumSize),
                 target.pane != .session(drag.sessionID)
             else { return nil }
@@ -104,7 +111,8 @@ struct SessionsView: View {
     private func preview(for drag: PaneDrag, in layout: PaneLayout) -> CGRect? {
         guard case .snap(let target)? = intent(for: drag, in: layout) else { return nil }
         let bounds = CGRect(origin: .zero, size: paneAreaFrame.size)
-        guard let frame = layout.frames(in: bounds, gap: PaneMetrics.gap)[target.pane] else { return nil }
+        guard let frame = layout.frames(in: bounds, gap: PaneMetrics.gap(glass: model.glassSessions))[target.pane]
+        else { return nil }
         return PaneLayout.previewRect(for: target.zone, in: frame)
     }
 
@@ -132,30 +140,28 @@ struct SessionsView: View {
     // MARK: - Pieces
 
     private var emptyState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "terminal")
-                .font(.system(size: 38, weight: .light))
-                .foregroundStyle(.tertiary)
-            Text(instance.isRunning ? "No sessions open" : "\(instance.shortName) is \(instance.stateLabel)")
-                .font(.title3.weight(.medium))
-            Text(
-                instance.isRunning
-                    ? "A session is a shell process inside the instance. Ending one never stops the instance."
-                    : "Start the instance to open a shell session in it."
-            )
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: 360)
-
+        Group {
             if instance.isRunning {
-                Button("Open Shell Session") { model.openSession(in: instance) }
-                    .buttonStyle(.glassProminent)
-                    .controlSize(.large)
+                ContentUnavailableView {
+                    Label("No Sessions", systemImage: "terminal")
+                } description: {
+                    Text("A session is a shell inside the instance. Closing one never stops the instance.")
+                } actions: {
+                    Button("Open Shell Session") { model.openSession(in: instance) }
+                        .buttonStyle(.glassProminent)
+                        .controlSize(.large)
+                }
             } else {
-                Button("Start Instance") { Task { await model.start(instance) } }
-                    .buttonStyle(.glassProminent)
-                    .controlSize(.large)
+                ContentUnavailableView {
+                    // Sentence case: the instance's own name doesn't take Title Case.
+                    Label("\(instance.shortName) is \(instance.stateLabel)", systemImage: "terminal")
+                } description: {
+                    Text("Start the instance to open a shell in it.")
+                } actions: {
+                    Button("Start Instance") { Task { await model.start(instance) } }
+                        .buttonStyle(.glassProminent)
+                        .controlSize(.large)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -203,7 +209,8 @@ struct SessionsView: View {
                 Button {
                     showingLayouts.toggle()
                 } label: {
-                    Image(systemName: "rectangle.split.2x2")
+                    Label("Snap Layouts", systemImage: "rectangle.split.2x2")
+                        .labelStyle(.iconOnly)
                         .frame(width: 16, height: 16)
                 }
                 .buttonStyle(.glass)
@@ -221,7 +228,8 @@ struct SessionsView: View {
                 Button {
                     withAnimation(.snappy) { _ = model.openSession(in: instance) }
                 } label: {
-                    Image(systemName: "plus")
+                    Label("New Session", systemImage: "plus")
+                        .labelStyle(.iconOnly)
                         .frame(width: 16, height: 16)
                 }
                 .buttonStyle(.glass)
@@ -288,7 +296,8 @@ private struct SessionTab: View {
                     .frame(width: 6, height: 6)
                     .opacity(showsClose ? 0 : 1)
                 Button(action: close) {
-                    Image(systemName: "xmark")
+                    Label("Close Session", systemImage: "xmark")
+                        .labelStyle(.iconOnly)
                         .font(.system(size: 8, weight: .bold))
                         .frame(width: 14, height: 14)
                         .background(
@@ -338,11 +347,11 @@ private struct SessionTab: View {
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
         .contextMenu {
-            if let splitRight { Button("Split Right", action: splitRight) }
-            if let splitDown { Button("Split Down", action: splitDown) }
-            if let unsplit { Button("Remove from Split", action: unsplit) }
+            if let splitRight { Button("Split Right", systemImage: "rectangle.split.2x1", action: splitRight) }
+            if let splitDown { Button("Split Down", systemImage: "rectangle.split.1x2", action: splitDown) }
+            if let unsplit { Button("Remove from Split", systemImage: "rectangle", action: unsplit) }
             if splitRight != nil || unsplit != nil { Divider() }
-            Button("Close Session", action: close)
+            Button("Close Session", systemImage: "xmark", action: close)
         }
         .help(session.exitDescription.map { "\(session.title) — ended (\($0))" } ?? session.title)
     }
@@ -392,26 +401,31 @@ struct SessionOverlay: View {
         .animation(.bouncy(duration: 0.35), value: session.state.isFinished)
     }
 
+    /// The message and its two buttons are glass side by side in one
+    /// container, which blends them — never glass buttons on a glass bar.
     private var endedBar: some View {
-        HStack(spacing: 10) {
-            Image(systemName: failed ? "exclamationmark.triangle.fill" : "checkmark.circle")
-                .foregroundStyle(failed ? .red : .secondary)
-            Text("Session ended\(session.exitDescription.map { " · \($0)" } ?? "")")
-                .font(.callout)
-                .lineLimit(1)
-            Spacer(minLength: 16)
+        HStack(spacing: 8) {
+            Label {
+                Text("Session ended\(session.exitDescription.map { " · \($0)" } ?? "")")
+                    .lineLimit(1)
+            } icon: {
+                Image(systemName: failed ? "exclamationmark.triangle.fill" : "checkmark.circle")
+                    .foregroundStyle(failed ? .red : .secondary)
+            }
+            .font(.callout)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .glassEffect(.regular, in: .capsule)
             Button("Close") { withAnimation(.snappy) { model.closeSession(session) } }
                 .buttonStyle(.glass)
+                .controlSize(.large)
             Button("Reopen") { withAnimation(.snappy) { model.reopenSession(session) } }
                 .buttonStyle(.glassProminent)
+                .controlSize(.large)
                 .keyboardShortcut(isFocused ? .defaultAction : nil)
                 .disabled(model.instances.first { $0.fullName == session.instanceName }?.isRunning != true)
         }
-        .padding(.leading, 16)
-        .padding(.trailing, 8)
-        .padding(.vertical, 8)
-        .glassEffect(.regular, in: .capsule)
-        .frame(maxWidth: 480)
+        .frame(maxWidth: 520)
     }
 
     private var failed: Bool {

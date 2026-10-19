@@ -26,171 +26,156 @@ struct NewInstanceSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("New Instance").font(.title2.weight(.semibold))
-                Spacer()
+            Text("New Instance")
+                .font(.title3.weight(.semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 4)
+
+            Form {
+                imageSection
+                networkSection
+                mountSection
+                environmentSection
+                resourceSection
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 18)
-            .padding(.bottom, 12)
-
-            Divider()
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    imageSection
-                    networkSection
-                    mountSection
-                    environmentSection
-                    resourceSection
+            .formStyle(.grouped)
+            // Folders dropped anywhere on the sheet become mounts.
+            .dropDestination(for: URL.self) { urls, _ in
+                addMounts(urls)
+            } isTargeted: { dropTargeted = $0 }
+            .overlay {
+                if dropTargeted {
+                    // Concentric with the sheet's own corners.
+                    ConcentricRectangle()
+                        .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                        .padding(9)
+                        .allowsHitTesting(false)
                 }
-                .padding(20)
             }
-            .frame(height: 430)
-
-            Divider()
-
-            HStack {
-                if creating, let busy = model.busy {
-                    ProgressView().controlSize(.small)
-                    Text(busy).font(.callout).foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button("Cancel") { dismiss() }
-                    .keyboardShortcut(.cancelAction)
-                    .buttonStyle(.glass)
-                Button(creating ? "Creating…" : "Create") { create() }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.glassProminent)
-                    .disabled(creating || spec.image.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
+            .safeAreaBar(edge: .bottom) { footer }
+            // A dense form under buttons: the firmer edge keeps both legible.
+            .scrollEdgeEffectStyle(.hard, for: .bottom)
         }
-        .frame(width: 620)
+        .frame(width: 560, height: 620)
         .onAppear { spec = RunSpec(config: model.config) }
+    }
+
+    private var footer: some View {
+        HStack {
+            if creating, let busy = model.busy {
+                ProgressView().controlSize(.small)
+                Text(busy).font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Cancel") { dismiss() }
+                .keyboardShortcut(.cancelAction)
+                .buttonStyle(.glass)
+            Button(creating ? "Creating…" : "Create") { create() }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.glassProminent)
+                .disabled(creating || spec.image.trimmingCharacters(in: .whitespaces).isEmpty)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
     }
 
     // MARK: - Sections
 
     private var imageSection: some View {
-        FormSection("Image and lifetime") {
-            LabeledContent("Image") {
-                TextField("ubuntu:24.04", text: $spec.image)
-                    .textFieldStyle(.roundedBorder)
-            }
-            LabeledContent("Name") {
-                HStack(spacing: 6) {
-                    Text(model.config.namePrefix)
-                        .foregroundStyle(.secondary)
-                        .font(.callout.monospaced())
-                    TextField("random", text: $spec.name)
-                        .textFieldStyle(.roundedBorder)
-                }
+        Section {
+            TextField("Image", text: $spec.image, prompt: Text("ubuntu:24.04"))
+            TextField(text: $spec.name, prompt: Text("random")) {
+                Text("Name")
+                Text("Created as \(model.config.namePrefix)\(spec.name.isEmpty ? "…" : spec.name)")
             }
             Picker("Runs as", selection: $spec.mode) {
-                Text("Instance — long-lived").tag(AgentVMMode.instance)
-                Text("Task — one command").tag(AgentVMMode.task)
+                Text("Instance").tag(AgentVMMode.instance)
+                Text("Task").tag(AgentVMMode.task)
             }
-            .pickerStyle(.radioGroup)
-
-            Text(spec.mode.summary)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
+            .pickerStyle(.segmented)
             if spec.mode == .task {
-                LabeledContent("Command") {
-                    TextField("sh -c 'make test'", text: $commandText)
-                        .textFieldStyle(.roundedBorder)
-                }
-                Toggle("One-shot: remove the instance when the command exits", isOn: $spec.removeOnExit)
-                    .font(.callout)
+                TextField("Command", text: $commandText, prompt: Text("sh -c 'make test'"))
+                Toggle("Remove when the command exits", isOn: $spec.removeOnExit)
             }
+        } header: {
+            Text("Image and Lifetime")
+        } footer: {
+            Text(spec.mode.summary)
         }
     }
 
     private var networkSection: some View {
-        FormSection("Network") {
+        Section {
             Picker("Posture", selection: $spec.net) {
                 Text("Open").tag(NetPosture.open)
                 Text("Killswitch").tag(NetPosture.killswitch)
             }
             .pickerStyle(.segmented)
-
-            Text(spec.net.summary)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if spec.net == .open {
-                Label(
-                    "Open is open: the instance reaches the internet and your host, and the host reaches it.",
-                    systemImage: "exclamationmark.triangle"
-                )
-                .font(.caption)
-                .foregroundStyle(.orange)
-            } else {
-                Label(
-                    "Host services bound to 0.0.0.0 are still reachable from inside. Bind them to 127.0.0.1.",
-                    systemImage: "info.circle"
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        } header: {
+            Text("Network")
+        } footer: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(spec.net.summary)
+                if spec.net == .open {
+                    Label(
+                        "Open is open: the instance reaches the internet and your Mac, and your Mac reaches it.",
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(.orange)
+                } else {
+                    Label(
+                        "Services on your Mac bound to 0.0.0.0 are still reachable from inside. Bind them to 127.0.0.1.",
+                        systemImage: "info.circle")
+                }
             }
         }
     }
 
     private var mountSection: some View {
-        FormSection("Mounts") {
-            Text("The guest sees exactly these directories and nothing else. / and your home folder are refused. Drop folders here to add them.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
+        Section {
             ForEach($spec.mounts) { $mount in
                 HStack(spacing: 6) {
-                    TextField("host directory", text: $mount.hostPath)
-                        .textFieldStyle(.roundedBorder)
+                    TextField("Host folder", text: $mount.hostPath, prompt: Text("Host folder"))
+                        .labelsHidden()
                     Button {
                         chooseDirectory(into: $mount)
                     } label: {
                         Image(systemName: "folder")
                     }
                     .buttonStyle(.borderless)
-                    Image(systemName: "arrow.right").font(.caption2).foregroundStyle(.tertiary)
-                    TextField("/work", text: $mount.guestPath)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 130)
-                    Toggle("ro", isOn: $mount.readOnly)
+                    .help("Choose a folder")
+                    Image(systemName: "arrow.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                    TextField("Path in the guest", text: $mount.guestPath, prompt: Text("/work"))
+                        .labelsHidden()
+                        .frame(width: 120)
+                    Toggle("Read-only", isOn: $mount.readOnly)
                         .toggleStyle(.checkbox)
-                        .help("Read-only")
                     Button {
                         spec.mounts.removeAll { $0.id == mount.id }
                     } label: {
                         Image(systemName: "minus.circle")
                     }
                     .buttonStyle(.borderless)
+                    .help("Remove this mount")
                 }
             }
-
             Button {
                 spec.mounts.append(MountSpec(guestPath: "/work"))
             } label: {
-                Label("Add mount", systemImage: "plus")
+                Label("Add Mount", systemImage: "plus")
             }
             .buttonStyle(.borderless)
+        } header: {
+            Text("Mounts")
+        } footer: {
+            Text(
+                "The guest sees exactly these folders and nothing else; / and your home folder are refused. Drop folders on this sheet to add them."
+            )
         }
-        .padding(8)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [5, 3]))
-                .opacity(dropTargeted ? 1 : 0)
-        )
-        .padding(-8)
-        .dropDestination(for: URL.self) { urls, _ in
-            addMounts(urls)
-        } isTargeted: { dropTargeted = $0 }
     }
 
     /// Dropped folders become mounts at /<folder name>; a first mount lands on
@@ -214,61 +199,54 @@ struct NewInstanceSheet: View {
     }
 
     private var environmentSection: some View {
-        FormSection("Environment") {
-            Toggle(
-                "Inject the shared registry (\(model.registry.load().count) variables)",
-                isOn: $spec.useRegistry)
-
+        Section {
+            Toggle(isOn: $spec.useRegistry) {
+                Text("Shared env registry")
+                Text("\(model.registry.load().count) variables")
+            }
             ForEach($spec.env) { $entry in
                 HStack(spacing: 6) {
-                    TextField("KEY", text: $entry.key)
-                        .textFieldStyle(.roundedBorder)
+                    TextField("Name", text: $entry.key, prompt: Text("KEY"))
+                        .labelsHidden()
+                        .font(.callout.monospaced())
                         .frame(width: 160)
                     Text("=").foregroundStyle(.tertiary)
-                    TextField("value", text: $entry.value)
-                        .textFieldStyle(.roundedBorder)
+                    TextField("Value", text: $entry.value, prompt: Text("value"))
+                        .labelsHidden()
                     Button {
                         spec.env.removeAll { $0.id == entry.id }
                     } label: {
                         Image(systemName: "minus.circle")
                     }
                     .buttonStyle(.borderless)
+                    .help("Remove this variable")
                 }
             }
-
             Button {
                 spec.env.append(EnvEntry(key: "", value: ""))
             } label: {
-                Label("Add variable", systemImage: "plus")
+                Label("Add Variable", systemImage: "plus")
             }
             .buttonStyle(.borderless)
-
-            Text("Per-instance variables override the registry. Both are baked in at creation.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        } header: {
+            Text("Environment")
+        } footer: {
+            Text("Variables here override the registry. Both are baked in at creation.")
         }
     }
 
     private var resourceSection: some View {
-        FormSection("Resources") {
-            HStack(spacing: 14) {
-                LabeledContent("CPUs") {
-                    TextField("default (4)", text: $cpusText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 100)
-                }
-                LabeledContent("Memory") {
-                    TextField("default (1G)", text: $memoryText)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 110)
-                }
+        Section {
+            TextField("CPUs", text: $cpusText, prompt: Text("Default (4)"))
+            TextField("Memory", text: $memoryText, prompt: Text("Default (1G)"))
+            Toggle(isOn: $spec.rosetta) {
+                Text("Rosetta")
+                Text("For x86 images only; needs the Rosetta runtime on this Mac.")
             }
+        } header: {
+            Text("Resources")
+        } footer: {
             Text("A guest sees one CPU more than you allocate: the VM runtime adds an overhead core.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
-            Toggle("Rosetta (x86 images only)", isOn: $spec.rosetta)
-                .help("Requires the Rosetta runtime on this Mac. Do not enable it for arm64 images.")
         }
     }
 
@@ -332,24 +310,5 @@ struct NewInstanceSheet: View {
         }
         if !current.isEmpty { arguments.append(current) }
         return arguments
-    }
-}
-
-struct FormSection<Content: View>: View {
-    let title: String
-    @ViewBuilder let content: Content
-
-    init(_ title: String, @ViewBuilder content: () -> Content) {
-        self.title = title
-        self.content = content()
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text(title)
-                .font(.headline)
-            content
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

@@ -17,6 +17,8 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $model.selection) {
+            Label("Dashboard", systemImage: "gauge.with.dots.needle.33percent")
+                .tag(AppModel.dashboardID)
             Section("Instances") {
                 ForEach(model.instances) { instance in
                     InstanceRow(instance: instance)
@@ -75,7 +77,9 @@ struct SidebarView: View {
                 }
             }
         }
-        .safeAreaInset(edge: .bottom) { DaemonStatusBar() }
+        // A bar of its own at the bottom of the sidebar: the list scrolls
+        // under it behind the system's scroll edge effect, not a hard line.
+        .safeAreaBar(edge: .bottom) { DaemonStatusBar() }
         .toolbar {
             ToolbarItem {
                 Button {
@@ -88,40 +92,47 @@ struct SidebarView: View {
             }
             ToolbarItem {
                 Menu {
-                    Button("Prune All AgentVM Instances…") { model.showingPrune = true }
-                        .disabled(model.instances.isEmpty)
-                    Button("Refresh Now") { Task { await model.refresh() } }
+                    Button("Refresh Now", systemImage: "arrow.clockwise") { Task { await model.refresh() } }
+                    Divider()
+                    Button("Prune All AgentVM Instances…", systemImage: "trash", role: .destructive) {
+                        model.showingPrune = true
+                    }
+                    .disabled(model.instances.isEmpty)
                 } label: {
-                    Label("More", systemImage: "ellipsis.circle")
+                    // The glass is already the circle: no enclosed symbol.
+                    Label("More", systemImage: "ellipsis")
                 }
                 .featureTip("More actions")
             }
         }
     }
 
+    /// Led by what the leading swipe does, as Apple asks of a context menu,
+    /// and ended by what the trailing swipe does.
     @ViewBuilder
     private func contextMenu(for instance: AgentVMInstance) -> some View {
-        Button("New Shell Session") { model.openSession(in: instance) }
-            .disabled(!instance.isRunning)
-        Divider()
         if instance.isRunning {
-            Button("Stop") { Task { await model.stop(instance) } }
+            Button("Stop", systemImage: "stop.fill") { Task { await model.stop(instance) } }
         } else {
-            Button("Start") { Task { await model.start(instance) } }
+            Button("Start", systemImage: "play.fill") { Task { await model.start(instance) } }
         }
-        Button(instance.canEditPorts ? "Edit Ports…" : "Ports…") { model.editingPorts = instance }
+        Button("New Shell Session", systemImage: "terminal") { model.openSession(in: instance) }
+            .disabled(!instance.isRunning)
+        Button(instance.canEditPorts ? "Edit Ports…" : "Ports…", systemImage: "point.3.connected.trianglepath.dotted") {
+            model.editingPorts = instance
+        }
         Divider()
-        Button("Copy IP Address") {
+        Button("Copy IP Address", systemImage: "network") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(instance.ipv4 ?? "", forType: .string)
         }
         .disabled(instance.ipv4 == nil)
-        Button("Copy Name") {
+        Button("Copy Name", systemImage: "doc.on.doc") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(instance.fullName, forType: .string)
         }
         Divider()
-        Button("Delete…", role: .destructive) { model.pendingDelete = instance }
+        Button("Delete…", systemImage: "trash", role: .destructive) { model.pendingDelete = instance }
     }
 }
 
@@ -137,7 +148,7 @@ struct InstanceRow: View {
                     .font(.body.weight(.medium))
                     .lineLimit(1)
                 HStack(spacing: 5) {
-                    Text(instance.image)
+                    Text(instance.imageDisplayName)
                         .lineLimit(1)
                         .truncationMode(.middle)
                     if instance.net == .killswitch {
@@ -156,12 +167,16 @@ struct InstanceRow: View {
                 .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
-            Text(instance.mode == .instance ? "inst" : "task")
-                .font(.caption2.weight(.medium))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 2)
-                .background(.quaternary, in: RoundedRectangle(cornerRadius: 4))
+            // Instances are the usual kind; only the exception is marked.
+            if instance.mode == .task {
+                Text("task")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 4))
+                    .help(instance.lifetimeDescription)
+            }
         }
         .padding(.vertical, 3)
     }
@@ -189,38 +204,38 @@ struct StateDot: View {
 struct DaemonStatusBar: View {
     @EnvironmentObject private var model: AppModel
 
+    private var running: Bool { model.daemon?.running == true }
+
     var body: some View {
-        HStack(spacing: 7) {
-            Circle()
-                .fill(model.daemon?.running == true ? Color.green : Color.red)
-                .frame(width: 7, height: 7)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(model.daemon?.running == true ? "container service running" : "service not running")
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(running ? Color.green : Color.red)
+                    .frame(width: 7, height: 7)
+                Text(running ? "Container service \(model.daemon?.release ?? "")" : "Container service not running")
                     .font(.caption.weight(.medium))
-                if let version = model.daemon?.version {
-                    Text("apiserver \(version) · XPC")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("start it with `container system start`")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                if let error = model.lastRefreshError {
-                    Text(error)
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                        .lineLimit(1)
-                        .help(error)
-                }
+                    .lineLimit(1)
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            .help(model.daemon?.version.map { "\($0), over XPC" } ?? "")
+            if !running {
+                Text("Start it with container system start")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .padding(.leading, 14)
+            }
+            if let error = model.lastRefreshError {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .lineLimit(1)
+                    .help(error)
+                    .padding(.leading, 14)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        // Floats over the list as a glass card, like the sidebar itself.
-        .glassEffect(.regular, in: .rect(cornerRadius: 14))
-        .padding(8)
-        .animation(.bouncy, value: model.daemon?.running)
+        .animation(.bouncy, value: running)
     }
 }

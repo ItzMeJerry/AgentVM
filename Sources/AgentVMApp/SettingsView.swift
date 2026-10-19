@@ -19,6 +19,10 @@ struct SettingsView: View {
                 .tabItem { Label("Defaults", systemImage: "slider.horizontal.3") }
             RegistrySettings()
                 .tabItem { Label("Environment", systemImage: "key") }
+            SessionSettings()
+                .tabItem { Label("Sessions", systemImage: "terminal") }
+            DashboardSettings()
+                .tabItem { Label("Dashboard", systemImage: "gauge.with.dots.needle.33percent") }
         }
         .frame(width: 560, height: 420)
     }
@@ -37,31 +41,32 @@ private struct DefaultsSettings: View {
                     Text("Open").tag(NetPosture.open)
                     Text("Killswitch").tag(NetPosture.killswitch)
                 }
-                Text(draft.net.summary)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             } header: {
-                Text("Defaults for a new instance")
+                Text("Defaults for a New Instance")
+            } footer: {
+                Text(draft.net.summary)
             }
 
             Section {
-                Toggle("One-shot by default (remove when the command exits)", isOn: $draft.removeOnExit)
-                TextField("CPUs", text: $cpusText, prompt: Text("daemon default (4)"))
-                TextField("Memory", text: $memoryText, prompt: Text("daemon default (1G)"))
+                Toggle(isOn: $draft.removeOnExit) {
+                    Text("One-shot by default")
+                    Text("Remove a task's instance when its command exits.")
+                }
+                TextField("CPUs", text: $cpusText, prompt: Text("Default (4)"))
+                TextField("Memory", text: $memoryText, prompt: Text("Default (1G)"))
             }
 
             Section {
                 LabeledContent("Name prefix", value: draft.namePrefix)
                 LabeledContent("Env registry", value: draft.envFilePath)
+            } footer: {
                 Text(
-                    "AgentVM only ever lists, deletes or prunes containers carrying the name prefix. Edit the file directly to change it."
+                    "AgentVM only ever lists, deletes or prunes containers carrying the name prefix. Edit the config file to change it."
                 )
-                .font(.caption)
-                .foregroundStyle(.secondary)
             }
 
             if !model.config.warnings.isEmpty {
-                Section("Config file warnings") {
+                Section("Config File Warnings") {
                     ForEach(model.config.warnings, id: \.self) { warning in
                         Label(warning, systemImage: "exclamationmark.triangle")
                             .font(.caption)
@@ -96,6 +101,51 @@ private struct DefaultsSettings: View {
         let memory = memoryText.trimmingCharacters(in: .whitespaces)
         updated.memory = memory.isEmpty ? nil : memory
         model.saveConfig(updated)
+    }
+}
+
+/// How shell sessions look. Like the dashboard's interval, it takes effect as
+/// soon as it's chosen.
+private struct SessionSettings: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(isOn: $model.glassSessions) {
+                    Text("Panes of glass")
+                    Text("Each session floats on Liquid Glass, with the desktop showing through behind it.")
+                }
+            } footer: {
+                Text(
+                    "Only the terminal's own background turns to glass: text, the cursor, selections and coloured output stay solid. With Reduce Transparency on in Accessibility settings, the glass turns opaque."
+                )
+            }
+        }
+        .formStyle(.grouped)
+    }
+}
+
+/// How often the dashboard reads. Unlike the config file, it takes effect as
+/// soon as it's chosen.
+private struct DashboardSettings: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Read figures every", selection: $model.samplingInterval) {
+                    ForEach(SamplingInterval.choices, id: \.self) { interval in
+                        Text(SamplingInterval.describe(interval)).tag(interval)
+                    }
+                }
+            } footer: {
+                Text(
+                    "How often the dashboard reads each running instance and this Mac, while AgentVM's window is open. More often draws finer lines and wakes each instance's VM more often. Disk use is read every 20 seconds either way."
+                )
+            }
+        }
+        .formStyle(.grouped)
     }
 }
 
