@@ -285,6 +285,7 @@ struct IntegrationTests {
             in: instance, command: command, workingDirectory: nil, environment: [])
         let collected = Collected()
         try await session.start(
+            on: DispatchQueue(label: "agentvmit.session"),
             onOutput: { collected.append($0) },
             onEOF: { collected.finish() })
         _ = await session.wait()
@@ -345,9 +346,9 @@ private final class Collected: @unchecked Sendable {
     private var data = Data()
     private var finished = false
 
-    func append(_ chunk: Data) {
+    func append(_ chunk: [UInt8]) {
         lock.lock()
-        data.append(chunk)
+        data.append(contentsOf: chunk)
         lock.unlock()
     }
 

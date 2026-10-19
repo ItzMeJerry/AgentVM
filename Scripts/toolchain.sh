@@ -67,3 +67,45 @@ error: no SwiftUI macro plugin (libSwiftUIMacros.dylib) found.
 MESSAGE
     return 1
 }
+
+# Puts Xcode's Metal compiler on PATH. SwiftTerm ships a Metal shader, and
+# SwiftPM compiles it by running `metal` by name — which a Command Line Tools
+# toolchain doesn't have. The compiler is an optional Xcode component
+# (`xcodebuild -downloadComponent MetalToolchain`); once installed, Xcode's
+# xcrun finds it even while the CLT stays selected. Sets METAL_COMPILER to its
+# path, or returns non-zero with an explanation.
+metal_on_path() {
+    local compiler xcode
+    compiler="$(command -v metal || xcrun --find metal 2>/dev/null || true)"
+    if [ -z "$compiler" ]; then
+        for xcode in /Applications/Xcode*.app/Contents/Developer; do
+            [ -d "$xcode" ] || continue
+            compiler="$(DEVELOPER_DIR="$xcode" xcrun --find metal 2>/dev/null || true)"
+            [ -n "$compiler" ] && break
+        done
+    fi
+    if [ -n "$compiler" ] && [ -x "$compiler" ]; then
+        METAL_COMPILER="$compiler"
+        case ":$PATH:" in
+            *":$(dirname "$compiler"):"*) ;;
+            *) export PATH="$(dirname "$compiler"):$PATH" ;;
+        esac
+        return 0
+    fi
+
+    cat >&2 <<'MESSAGE'
+error: no Metal compiler (metal) found.
+
+    The terminal library, SwiftTerm, ships a Metal shader, and compiling it
+    needs Xcode's Metal toolchain — an optional component. Install it once:
+
+        sudo /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -license accept
+        /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -downloadComponent MetalToolchain
+
+    (The full path matters: a plain `xcodebuild` refuses to run while the
+    Command Line Tools are the selected toolchain.)
+
+    Scripts/doctor.sh reports what it finds.
+MESSAGE
+    return 1
+}

@@ -17,6 +17,7 @@ let package = Package(
     products: [
         .executable(name: "agentvm-gui", targets: ["AgentVMApp"]),
         .library(name: "AgentVMKit", targets: ["AgentVMKit"]),
+        .library(name: "AgentVMLayout", targets: ["AgentVMLayout"]),
     ],
     dependencies: [
         // Pinned to the version of the `container` daemon this talks to: the XPC
@@ -26,10 +27,12 @@ let package = Package(
         // Pulled in transitively by `container`; declared here so the app can name
         // its types (ContainerizationError, Terminal.Size, Platform) directly.
         .package(url: "https://github.com/apple/containerization.git", exact: "0.41.0"),
-        // Pinned below 1.12: from there on SwiftTerm ships a Metal shader, and
-        // compiling it needs Xcode's Metal toolchain component — a multi-gigabyte
-        // download this app has no other use for. 1.11.2 has the same view API.
-        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.11.2"),
+        // 1.20.0 brings line-accurate trackpad scrolling, Alternate Scroll Mode
+        // (DECSET 1007) and correct wheel reporting, so the app uses SwiftTerm's own
+        // scrolling instead of reimplementing it. The last release before upstream's
+        // announced breaking changes. It ships a Metal shader, so building needs
+        // Xcode's Metal toolchain component; Scripts/doctor.sh checks for it.
+        .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", exact: "1.20.0"),
         // Already in the graph below `container`; named here for Logger and FilePath,
         // which its client APIs take as parameters.
         .package(url: "https://github.com/apple/swift-log.git", from: "1.10.1"),
@@ -54,10 +57,17 @@ let package = Package(
             ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
+        // How shell sessions share the terminal area — split panes, templates,
+        // divider snapping — as plain values with no UI dependency.
+        .target(
+            name: "AgentVMLayout",
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
         .executableTarget(
             name: "AgentVMApp",
             dependencies: [
                 "AgentVMKit",
+                "AgentVMLayout",
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
             ],
             swiftSettings: [.swiftLanguageMode(.v5)]
@@ -68,6 +78,13 @@ let package = Package(
         .testTarget(
             name: "AgentVMKitTests",
             dependencies: ["AgentVMKit"],
+            swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        // Every split-pane rule, including a randomized run of thousands of
+        // operations that checks the layout stays well-formed after each one.
+        .testTarget(
+            name: "AgentVMLayoutTests",
+            dependencies: ["AgentVMLayout"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

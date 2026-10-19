@@ -37,6 +37,7 @@ fi
 # shellcheck source=Scripts/toolchain.sh
 source "$ROOT/Scripts/toolchain.sh"
 swift_plugin_flags
+metal_on_path || exit 1
 
 swift build -c "$CONFIGURATION" --product agentvm-gui "${SWIFT_PLUGIN_FLAGS[@]}"
 BIN_DIR="$(swift build -c "$CONFIGURATION" --product agentvm-gui "${SWIFT_PLUGIN_FLAGS[@]}" --show-bin-path)"

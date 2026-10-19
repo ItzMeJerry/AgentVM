@@ -18,9 +18,28 @@ open .build/AgentVM.app
 | **macOS 26 or later** | A host-only network — the killswitch — cannot be built on macOS 15. |
 | **Apple Silicon** | `apple/container` runs Linux VMs on Virtualization.framework; there is no Intel path. |
 | **Xcode** | Installed, not just the Command Line Tools. See below. |
+| **Xcode's Metal toolchain** | An optional Xcode component; the terminal library compiles a Metal shader. See below. |
 | **~4 GB of disk** | What a clean `.build` weighs. |
 | **A working network** | The first build clones `apple/container` and its whole dependency graph. |
 | **`container` 1.3.0** | Only to *run* it. The build needs no daemon. |
+
+### The Metal toolchain
+
+The terminal is [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm), which
+ships a Metal shader that the build compiles. The compiler for it is an
+optional Xcode component. Install it once:
+
+```sh
+sudo /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -license accept
+/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -downloadComponent MetalToolchain
+```
+
+Xcode's `xcodebuild` is named by its full path because a plain `xcodebuild`
+refuses to run while the Command Line Tools are the selected toolchain.
+
+The scripts find it inside Xcode and put it on `PATH` for the build, so the
+Command Line Tools can stay selected. `bash Scripts/doctor.sh` says whether
+it is there.
 
 ### Why Xcode and not just the Command Line Tools
 
@@ -114,9 +133,11 @@ instances belong to the `container` daemon.
   installed must agree. Upgrading the daemon means bumping this pin.
 - **`apple/containerization` 0.41.0** — the version `container` 1.3.0 itself
   resolves to. Named directly so the app can use its types.
-- **`SwiftTerm` 1.11.2** — from 1.12 on it ships a Metal shader, and compiling
-  that needs Xcode's Metal toolchain component, a multi-gigabyte download this
-  app has no other use for. 1.11.2 has the same view API.
+- **`SwiftTerm` 1.20.0** — its own scrolling is line-accurate on a trackpad,
+  reports the wheel to programs that track the mouse, and supports Alternate
+  Scroll Mode (DECSET 1007), so the app uses it instead of reimplementing it.
+  It is the last release before upstream's announced breaking changes, and it
+  needs the Metal toolchain above.
 
 `Package.resolved` is committed, so a clone builds the same graph you do.
 
@@ -125,6 +146,9 @@ instances belong to the `container` daemon.
 **`external macro implementation type ... could not be found`**
 The macro plugin isn't being found. Run `bash Scripts/doctor.sh`; if it reports
 the SwiftUI macro plugin missing, install Xcode and open it once.
+
+**`unable to spawn process 'metal'`**
+Xcode's Metal toolchain isn't installed; see [The Metal toolchain](#the-metal-toolchain).
 
 **`ld: warning: search path '.../Developer/Library/Frameworks' not found`**
 Harmless. It comes from building against a CLT toolchain and does not affect

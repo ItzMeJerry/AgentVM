@@ -39,8 +39,10 @@ incremental (~30 s).
 
 Xcode has to be installed, not just the Command Line Tools: SwiftUI's property wrappers are
 macros now, and the plugin that expands them ships inside Xcode. `Scripts/build-app.sh`
-finds it and passes it to the compiler — no `xcode-select`, no `sudo`. `Scripts/doctor.sh`
-checks for all of this up front and says how to fix whatever is missing.
+finds it and passes it to the compiler — no `xcode-select`, no `sudo`. The terminal library
+also compiles a Metal shader, which needs Xcode's optional Metal toolchain; install it once
+with `xcodebuild -downloadComponent MetalToolchain` (BUILDING.md has the exact commands).
+`Scripts/doctor.sh` checks for all of this up front and says how to fix whatever is missing.
 
 **[BUILDING.md](BUILDING.md)** has the full story: prerequisites, what each script does,
 why the three dependencies are pinned exactly, and what to do when a build goes wrong.
@@ -54,6 +56,10 @@ why the three dependencies are pinned exactly, and what to do when a build goes 
 | Two-finger double tap | toggle between normal and large text |
 | Three-finger swipe, or ⇧⌘] ⇧⌘[ | next / previous session (the swipe needs "Swipe between pages" set to three fingers) |
 | ⌘T, ⌘1…⌘9 | new session, jump to a session |
+| Drag a session's tab onto the terminal | snap it into a split: an edge gives it that half of the pane, the middle swaps or shows it there |
+| Snap Layouts (beside +) | arrange sessions in a ready-made layout, Windows-style: click the zone the focused session goes in |
+| Drag the line between panes | resize them; it snaps to halves, thirds and quarters unless Dividers is set to Free. Double-click to even out |
+| Drag a pane's header onto the tab bar, or click its × | take it out of the split; the session stays a tab |
 | Right click in a session | Copy, Paste, Select All, Clear Scrollback, text size |
 | Swipe an instance in the sidebar | right to start or stop it, left to delete it |
 | Double-click an instance | open a shell in it, starting it first if it's stopped |
@@ -181,10 +187,12 @@ NAME_PREFIX=agentvm-      # the app only touches names with this prefix
 ## Layout
 
 ```
-Package.swift              container 1.3.0, containerization 0.41.0, SwiftTerm 1.11.2
+Package.swift              container 1.3.0, containerization 0.41.0, SwiftTerm 1.20.0
 Sources/AgentVMKit/            the engine — config, env registry, and every daemon call
+Sources/AgentVMLayout/         split panes as plain values: snapping, templates, dividers
 Sources/AgentVMApp/            SwiftUI app, terminal sessions
 Tests/AgentVMKitTests/         the suite; no daemon, no VM, no network
+Tests/AgentVMLayoutTests/      every split-pane rule, plus thousands of random operations
 Scripts/                   doctor, build, test, clean
 BUILDING.md                building from source, and what to do when it fails
 CONTRIBUTING.md            the one rule, the layout, and how to test a change

@@ -21,5 +21,6 @@ cd "$ROOT"
 # shellcheck source=Scripts/toolchain.sh
 source "$ROOT/Scripts/toolchain.sh"
 swift_plugin_flags
+metal_on_path || exit 1
 
 exec swift test "${SWIFT_PLUGIN_FLAGS[@]}" "$@"

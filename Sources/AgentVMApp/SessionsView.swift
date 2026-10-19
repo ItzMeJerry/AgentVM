@@ -1,7 +1,9 @@
 //
 //  SessionsView.swift
-//  Shell sessions as tabs. Each one is an independent exec process: open
-//  several, close them in any order — the instance never notices.
+//  Shell sessions as tabs, shown in one pane or several. Each session is an
+//  independent exec process: open several, close them in any order — the
+//  instance never notices. Drag a tab onto the terminal area to snap it into a
+//  split; drag a pane back onto the tab bar to take it out again.
 //
 //  AgentVM — https://github.com/ItzMeJerry/AgentVM
 //  Copyright 2026 Jerry Lan
@@ -10,38 +12,124 @@
 
 import AppKit
 import AgentVMKit
+import AgentVMLayout
 import SwiftUI
 
 struct SessionsView: View {
+    /// The coordinate space drags are measured in: tab bar and panes alike.
+    static let space = "sessions"
+
     @EnvironmentObject private var model: AppModel
     let instance: AgentVMInstance
     @Namespace private var glass
 
+    @State private var drag: PaneDrag?
+    @State private var tabBarFrame: CGRect = .zero
+    @State private var paneAreaFrame: CGRect = .zero
+    @State private var showingLayouts = false
+
     private var sessions: [TerminalSession] { model.sessions[instance.fullName] ?? [] }
 
-    private var selected: TerminalSession? {
-        let id = model.selectedSession[instance.fullName]
-        return sessions.first { $0.id == id } ?? sessions.last
+    /// The model's layout. It exists whenever there are sessions; one pane of
+    /// the newest is only a stand-in for the moment one is being opened.
+    private var layout: PaneLayout? {
+        model.layouts[instance.fullName] ?? sessions.last.map { PaneLayout(session: $0.id) }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if sessions.isEmpty {
-                emptyState
-            } else {
-                tabBar
+            if let layout, !sessions.isEmpty {
+                tabBar(layout)
+                    .overlay {
+                        if drag.flatMap({ intent(for: $0, in: layout) }) == .unsplit {
+                            Capsule()
+                                .strokeBorder(Color.accentColor.opacity(0.75), lineWidth: 2)
+                                .padding(3)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: {
+                        tabBarFrame = $0
+                    }
                 Divider()
-                if let selected {
-                    // Only the selected session is mounted. Its view belongs to
-                    // the session, so scrollback and process survive the switch,
-                    // and scrolls and clicks can't land on a hidden tab.
-                    TerminalPane(session: selected)
-                        .id(selected.id)
-                        .overlay(alignment: .bottom) { SessionOverlay(session: selected) }
-                }
+                PaneArea(
+                    instance: instance, layout: layout, sessions: sessions,
+                    dropPreview: drag.flatMap { preview(for: $0, in: layout) },
+                    drag: PaneDragHandlers(changed: dragChanged, ended: dragEnded))
+                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: {
+                        paneAreaFrame = $0
+                    }
+            } else {
+                emptyState
+            }
+        }
+        .coordinateSpace(.named(Self.space))
+        .overlay(alignment: .topLeading) {
+            if let drag {
+                DragLabel(title: drag.title)
+                    .position(x: drag.location.x + 14, y: drag.location.y + 16)
+                    .allowsHitTesting(false)
             }
         }
     }
+
+    // MARK: - Dragging sessions
+
+    /// What letting go here would do.
+    private enum Intent: Equatable {
+        case snap(DropTarget)
+        /// Over the tab bar: take the session out of the split.
+        case unsplit
+    }
+
+    private func intent(for drag: PaneDrag, in layout: PaneLayout) -> Intent? {
+        if paneAreaFrame.contains(drag.location) {
+            let point = CGPoint(x: drag.location.x - paneAreaFrame.minX, y: drag.location.y - paneAreaFrame.minY)
+            guard
+                let target = layout.dropTarget(
+                    at: point, in: CGRect(origin: .zero, size: paneAreaFrame.size), gap: PaneMetrics.gap,
+                    minimumSize: PaneMetrics.minimumSize),
+                target.pane != .session(drag.sessionID)
+            else { return nil }
+            return .snap(target)
+        }
+        if tabBarFrame.contains(drag.location), layout.isSplit, layout.contains(session: drag.sessionID) {
+            return .unsplit
+        }
+        return nil
+    }
+
+    /// The part of the pane area a drop would take, in the pane area's own
+    /// coordinates.
+    private func preview(for drag: PaneDrag, in layout: PaneLayout) -> CGRect? {
+        guard case .snap(let target)? = intent(for: drag, in: layout) else { return nil }
+        let bounds = CGRect(origin: .zero, size: paneAreaFrame.size)
+        guard let frame = layout.frames(in: bounds, gap: PaneMetrics.gap)[target.pane] else { return nil }
+        return PaneLayout.previewRect(for: target.zone, in: frame)
+    }
+
+    private func dragChanged(_ sessionID: UUID, _ title: String, _ location: CGPoint) {
+        drag = PaneDrag(sessionID: sessionID, title: title, location: location)
+    }
+
+    private func dragEnded(_ location: CGPoint) {
+        guard var finished = drag, let layout else {
+            drag = nil
+            return
+        }
+        finished.location = location
+        let name = instance.fullName
+        withAnimation(.snappy(duration: 0.25)) {
+            switch intent(for: finished, in: layout) {
+            case .snap(let target): model.snap(finished.sessionID, to: target, in: name)
+            case .unsplit: model.removePane(.session(finished.sessionID), in: name)
+            case nil: break
+            }
+            drag = nil
+        }
+    }
+
+    // MARK: - Pieces
 
     private var emptyState: some View {
         VStack(spacing: 12) {
@@ -73,8 +161,9 @@ struct SessionsView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var tabBar: some View {
-        GlassEffectContainer(spacing: 6) {
+    private func tabBar(_ layout: PaneLayout) -> some View {
+        let name = instance.fullName
+        return GlassEffectContainer(spacing: 6) {
             HStack(spacing: 6) {
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -83,23 +172,49 @@ struct SessionsView: View {
                                 SessionTab(
                                     session: session,
                                     index: index + 1,
-                                    isSelected: session.id == selected?.id,
+                                    isSelected: layout.focusedSession == session.id,
+                                    isOnScreen: layout.isSplit && layout.contains(session: session.id),
                                     namespace: glass,
                                     select: {
-                                        withAnimation(.bouncy(duration: 0.3)) {
-                                            model.selectedSession[instance.fullName] = session.id
-                                        }
+                                        withAnimation(.bouncy(duration: 0.3)) { model.reveal(session.id, in: name) }
                                     },
-                                    close: { withAnimation(.snappy) { model.closeSession(session) } })
+                                    close: { withAnimation(.snappy) { model.closeSession(session) } },
+                                    splitRight: splitAction(session, .right, layout),
+                                    splitDown: splitAction(session, .bottom, layout),
+                                    unsplit: layout.isSplit && layout.contains(session: session.id)
+                                        ? {
+                                            withAnimation(.snappy(duration: 0.25)) {
+                                                model.removePane(.session(session.id), in: name)
+                                            }
+                                        } : nil,
+                                    drag: PaneDragHandlers(changed: dragChanged, ended: dragEnded))
                                 .id(session.id)
                             }
                         }
                         .padding(.horizontal, 10)
                         .padding(.vertical, 7)
                     }
-                    .onChange(of: selected?.id) { _, id in
+                    .onChange(of: layout.focusedSession) { _, id in
                         guard let id else { return }
                         withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(id) }
+                    }
+                }
+
+                Button {
+                    showingLayouts.toggle()
+                } label: {
+                    Image(systemName: "rectangle.split.2x2")
+                        .frame(width: 16, height: 16)
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .featureTip("Snap layouts")
+                .popover(isPresented: $showingLayouts, arrowEdge: .bottom) {
+                    LayoutPicker(current: layout.matchingTemplate, mode: $model.paneResizeMode) { template, zone in
+                        withAnimation(.snappy(duration: 0.25)) {
+                            model.applyTemplate(template, focusZone: zone, in: name)
+                        }
+                        showingLayouts = false
                     }
                 }
 
@@ -117,15 +232,48 @@ struct SessionsView: View {
             }
         }
     }
+
+    /// "Split Right" or "Split Down" from a tab's menu: the session snaps
+    /// beside the focused pane. Not offered for the focused session itself.
+    private func splitAction(_ session: TerminalSession, _ zone: DropZone, _ layout: PaneLayout) -> (() -> Void)? {
+        guard layout.focused != .session(session.id) else { return nil }
+        let target = DropTarget(pane: layout.focused, zone: zone)
+        return {
+            withAnimation(.snappy(duration: 0.25)) { model.snap(session.id, to: target, in: instance.fullName) }
+        }
+    }
+}
+
+/// The label that follows the pointer while a session is dragged.
+private struct DragLabel: View {
+    let title: String
+
+    var body: some View {
+        Label(title, systemImage: "terminal")
+            .font(.callout)
+            .lineLimit(1)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .glassEffect(.regular, in: .capsule)
+            .frame(maxWidth: 220)
+            .fixedSize()
+    }
 }
 
 private struct SessionTab: View {
     @ObservedObject var session: TerminalSession
     let index: Int
+    /// The session in the focused pane.
     let isSelected: Bool
+    /// In one of the split's other panes.
+    let isOnScreen: Bool
     let namespace: Namespace.ID
     let select: () -> Void
     let close: () -> Void
+    let splitRight: (() -> Void)?
+    let splitDown: (() -> Void)?
+    let unsplit: (() -> Void)?
+    let drag: PaneDragHandlers
 
     @State private var hovering = false
     @State private var hoveringClose = false
@@ -136,7 +284,7 @@ private struct SessionTab: View {
             // it appears under the pointer and on the selected tab.
             ZStack {
                 Circle()
-                    .fill(dotColor)
+                    .fill(session.state.dotColor)
                     .frame(width: 6, height: 6)
                     .opacity(showsClose ? 0 : 1)
                 Button(action: close) {
@@ -173,7 +321,7 @@ private struct SessionTab: View {
         .padding(.vertical, 4)
         .padding(.vertical, 2)
         .background {
-            if hovering && !isSelected {
+            if (hovering || isOnScreen) && !isSelected {
                 Capsule().fill(.quaternary)
             }
         }
@@ -183,31 +331,33 @@ private struct SessionTab: View {
         .glassEffectID(isSelected ? "selected" : "tab-\(session.id)", in: namespace)
         .contentShape(Capsule())
         .onTapGesture(perform: select)
+        .gesture(
+            DragGesture(minimumDistance: 6, coordinateSpace: .named(SessionsView.space))
+                .onChanged { drag.changed(session.id, session.title, $0.location) }
+                .onEnded { drag.ended($0.location) })
         .onHover { hovering = $0 }
         .animation(.easeOut(duration: 0.12), value: hovering)
         .contextMenu {
+            if let splitRight { Button("Split Right", action: splitRight) }
+            if let splitDown { Button("Split Down", action: splitDown) }
+            if let unsplit { Button("Remove from Split", action: unsplit) }
+            if splitRight != nil || unsplit != nil { Divider() }
             Button("Close Session", action: close)
         }
         .help(session.exitDescription.map { "\(session.title) — ended (\($0))" } ?? session.title)
     }
 
     private var showsClose: Bool { hovering || isSelected }
-
-    private var dotColor: Color {
-        switch session.state {
-        case .starting: .yellow
-        case .running: .green
-        case .exited: .secondary
-        case .failed: .red
-        }
-    }
 }
 
 /// Floats over the terminal: a way back to the live screen while reading the
 /// scrollback, and, once the session has ended, what happened and what next.
-private struct SessionOverlay: View {
+struct SessionOverlay: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject var session: TerminalSession
+    /// Only the focused pane's Reopen answers Return; in a split, another
+    /// pane's Return belongs to the shell running there.
+    let isFocused: Bool
     @Namespace private var glass
 
     var body: some View {
@@ -254,7 +404,7 @@ private struct SessionOverlay: View {
                 .buttonStyle(.glass)
             Button("Reopen") { withAnimation(.snappy) { model.reopenSession(session) } }
                 .buttonStyle(.glassProminent)
-                .keyboardShortcut(.defaultAction)
+                .keyboardShortcut(isFocused ? .defaultAction : nil)
                 .disabled(model.instances.first { $0.fullName == session.instanceName }?.isRunning != true)
         }
         .padding(.leading, 16)

@@ -135,6 +135,15 @@ else
         "Install Xcode from the App Store and open it once."
 fi
 
+# SwiftTerm, the terminal library, ships a Metal shader that the build compiles.
+if metal_on_path 2>/dev/null; then
+    ok "Metal compiler" "$METAL_COMPILER"
+else
+    fail "Metal compiler" "not installed — the terminal library ships a Metal shader" \
+        "sudo /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -license accept" \
+        "/Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -downloadComponent MetalToolchain"
+fi
+
 # ------------------------------------------------------------- runtime pieces
 
 heading "To run it (not needed to build)"

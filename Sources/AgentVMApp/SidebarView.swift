@@ -83,7 +83,7 @@ struct SidebarView: View {
                 } label: {
                     Label("New Instance", systemImage: "plus")
                 }
-                .hoverHint("New Instance\nBoot a new Linux VM.")
+                .featureTip("New instance")
                 .disabled(model.daemon?.running != true)
             }
             ToolbarItem {
@@ -94,7 +94,7 @@ struct SidebarView: View {
                 } label: {
                     Label("More", systemImage: "ellipsis.circle")
                 }
-                .hoverHint("More\nPrune all AgentVM instances, or refresh the list.")
+                .featureTip("More actions")
             }
         }
     }

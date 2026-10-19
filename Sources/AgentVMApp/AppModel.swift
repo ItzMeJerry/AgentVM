@@ -10,6 +10,7 @@
 
 import Foundation
 import AgentVMKit
+import AgentVMLayout
 import SwiftUI
 
 @MainActor
@@ -27,7 +28,17 @@ final class AppModel: ObservableObject {
     /// The last polling failure, shown in the status bar rather than as an alert.
     @Published var lastRefreshError: String?
     @Published var sessions: [String: [TerminalSession]] = [:]
+    /// The session tab last chosen, per instance — where ⌘[ and ⌘] start from.
     @Published var selectedSession: [String: UUID] = [:]
+    /// Which sessions are on screen and where, per instance. Present whenever
+    /// the instance has sessions; one pane until you split it.
+    @Published var layouts: [String: PaneLayout] = [:]
+    /// Whether pane dividers snap to standard sizes (the default) or move
+    /// freely. Remembered across launches.
+    @Published var paneResizeMode: ResizeMode {
+        didSet { UserDefaults.standard.set(paneResizeMode.rawValue, forKey: Self.resizeModeKey) }
+    }
+    private static let resizeModeKey = "paneResizeMode"
     /// Instances whose baked-in environment predates the current registry.
     @Published var staleEnvironment: Set<String> = []
     /// The instance a Delete is waiting on confirmation for, from wherever it
@@ -58,6 +69,7 @@ final class AppModel: ObservableObject {
         config = (try? AgentVMConfig.load()) ?? AgentVMConfig()
         let stored = UserDefaults.standard.double(forKey: Self.fontSizeKey)
         terminalFontSize = stored > 0 ? CGFloat(stored) : AgentVMTerminalView.defaultFontSize
+        paneResizeMode = ResizeMode(rawValue: UserDefaults.standard.string(forKey: Self.resizeModeKey) ?? "") ?? .snap
     }
 
     var selectedInstance: AgentVMInstance? {
@@ -168,6 +180,7 @@ final class AppModel: ObservableObject {
             try await engine.delete(instance, force: force)
             endSessions(for: instance.fullName)
             sessions[instance.fullName] = nil
+            layouts[instance.fullName] = nil
             await refresh()
         } catch {
             report(error, title: "Could not remove \(instance.shortName)")
@@ -198,7 +211,11 @@ final class AppModel: ObservableObject {
         defer { busy = nil }
         do {
             let result = try await engine.prune(config: config)
-            for name in result.containers { endSessions(for: name); sessions[name] = nil }
+            for name in result.containers {
+                endSessions(for: name)
+                sessions[name] = nil
+                layouts[name] = nil
+            }
             await refresh()
             if !result.failures.isEmpty {
                 alert = AppAlert(
@@ -212,25 +229,58 @@ final class AppModel: ObservableObject {
 
     // MARK: - Sessions
 
+    /// Opens a shell session and shows it: in the focused pane, or in `pane`
+    /// when given — an empty zone's New Session button.
     @discardableResult
-    func openSession(in instance: AgentVMInstance, command: [String] = ["sh"], workingDirectory: String? = nil)
-        -> TerminalSession?
-    {
+    func openSession(
+        in instance: AgentVMInstance, command: [String] = ["sh"], workingDirectory: String? = nil,
+        intoPane pane: PaneContent? = nil
+    ) -> TerminalSession? {
+        guard let session = makeSession(in: instance, command: command, workingDirectory: workingDirectory) else {
+            return nil
+        }
+        let name = instance.fullName
+        sessions[name, default: []].append(session)
+        if let pane, var layout = layouts[name], layout.show(session: session.id, in: pane) {
+            layouts[name] = layout
+            selectedSession[name] = session.id
+        } else {
+            reveal(session.id, in: name)
+        }
+        return session
+    }
+
+    /// A started session, not yet listed as a tab or shown in a pane.
+    private func makeSession(
+        in instance: AgentVMInstance, command: [String], workingDirectory: String?
+    ) -> TerminalSession? {
         guard instance.isRunning else {
             alert = AppAlert(
                 title: "\(instance.shortName) is not running",
                 message: "Start it first — a session is a process inside a running instance.")
             return nil
         }
-        let session = TerminalSession(instanceName: instance.fullName, command: command, fontSize: terminalFontSize)
+        let name = instance.fullName
+        let session = TerminalSession(instanceName: name, command: command, fontSize: terminalFontSize)
+        let id = session.id
         session.terminalView.onFontSizeRequest = { [weak self] size in self?.setTerminalFontSize(size) }
-        session.terminalView.onSwipe = { [weak self] offset in
-            self?.selectAdjacentSession(offset, in: instance.fullName)
-        }
-        sessions[instance.fullName, default: []].append(session)
-        selectedSession[instance.fullName] = session.id
+        session.terminalView.onSwipe = { [weak self] offset in self?.selectAdjacentSession(offset, in: name) }
+        // A click into a terminal gives its pane the focus.
+        session.terminalView.onActivate = { [weak self] in self?.focusPane(.session(id), in: name) }
         session.start(engine: engine, instance: instance, workingDirectory: workingDirectory)
         return session
+    }
+
+    /// Shows a session the way clicking its tab does: its pane takes the focus
+    /// if it's on screen; otherwise it appears in the focused pane.
+    func reveal(_ id: UUID, in name: String) {
+        selectedSession[name] = id
+        if var layout = layouts[name] {
+            layout.reveal(session: id)
+            layouts[name] = layout
+        } else {
+            layouts[name] = PaneLayout(session: id)
+        }
     }
 
     /// Closes one session tab. The instance is untouched.
@@ -239,28 +289,34 @@ final class AppModel: ObservableObject {
         let name = session.instanceName
         let index = sessions[name]?.firstIndex { $0.id == session.id }
         sessions[name]?.removeAll { $0.id == session.id }
-        if selectedSession[name] == session.id, let list = sessions[name], let index {
-            // The neighbour takes its place, as when closing a browser tab.
-            selectedSession[name] = list.isEmpty ? nil : list[min(index, list.count - 1)].id
-        }
+        let remaining = (sessions[name] ?? []).map(\.id)
+        let next = PaneLayout.closing(session.id, from: layouts[name], remaining: remaining, at: index)
+        layouts[name] = next?.layout
+        selectedSession[name] = next?.selected
     }
 
     /// Replaces an ended session with a fresh one running the same command,
-    /// in the same tab position.
+    /// in the same tab position and the same pane.
     func reopenSession(_ session: TerminalSession) {
         guard let instance = instances.first(where: { $0.fullName == session.instanceName }),
-            let replacement = openSession(in: instance, command: session.command)
+            let replacement = makeSession(in: instance, command: session.command, workingDirectory: nil)
         else { return }
-        var list = sessions[session.instanceName] ?? []
-        list.removeAll { $0.id == replacement.id }
+        let name = session.instanceName
+        var list = sessions[name] ?? []
         if let index = list.firstIndex(where: { $0.id == session.id }) {
             list[index] = replacement
         } else {
             list.append(replacement)
         }
         session.terminate()
-        sessions[session.instanceName] = list
-        selectedSession[session.instanceName] = replacement.id
+        sessions[name] = list
+        if var layout = layouts[name], layout.replace(session: session.id, with: replacement.id) {
+            layout.focus(.session(replacement.id))
+            layouts[name] = layout
+            selectedSession[name] = replacement.id
+        } else {
+            reveal(replacement.id, in: name)
+        }
     }
 
     /// Next or previous session tab, wrapping around.
@@ -268,7 +324,7 @@ final class AppModel: ObservableObject {
         guard let name = instanceName ?? selection, let list = sessions[name], !list.isEmpty else { return }
         let current = list.firstIndex { $0.id == selectedSession[name] } ?? list.count - 1
         let next = (current + offset % list.count + list.count) % list.count
-        selectedSession[name] = list[next].id
+        reveal(list[next].id, in: name)
     }
 
     func selectSession(number: Int) {
@@ -276,12 +332,80 @@ final class AppModel: ObservableObject {
         // ⌘9 is always the last tab, as in Safari and Terminal.
         let index = number == 9 ? list.count - 1 : number - 1
         guard list.indices.contains(index) else { return }
-        selectedSession[name] = list[index].id
+        reveal(list[index].id, in: name)
     }
 
+    /// The session the keyboard goes to. Nil while an empty zone has the focus.
     var selectedSessionForCurrentInstance: TerminalSession? {
         guard let name = selection, let list = sessions[name] else { return nil }
+        if let layout = layouts[name] {
+            return layout.focusedSession.flatMap { id in list.first { $0.id == id } }
+        }
         return list.first { $0.id == selectedSession[name] } ?? list.last
+    }
+
+    // MARK: - Split panes
+
+    func focusPane(_ pane: PaneContent, in name: String) {
+        guard var layout = layouts[name], layout.focused != pane, layout.focus(pane) else { return }
+        layouts[name] = layout
+        if let id = pane.sessionID { selectedSession[name] = id }
+    }
+
+    /// Drops a session onto a pane, as dragging its tab there does.
+    func snap(_ sessionID: UUID, to target: DropTarget, in name: String) {
+        guard var layout = layouts[name], layout.snap(session: sessionID, to: target) else { return }
+        layouts[name] = layout
+        selectedSession[name] = sessionID
+    }
+
+    /// Puts a session into a particular pane — an empty zone, say.
+    func show(_ sessionID: UUID, inPane pane: PaneContent, in name: String) {
+        guard var layout = layouts[name], layout.show(session: sessionID, in: pane) else { return }
+        layouts[name] = layout
+        selectedSession[name] = sessionID
+    }
+
+    /// Takes a pane out of the split. A session in it stays a tab.
+    func removePane(_ pane: PaneContent, in name: String) {
+        guard var layout = layouts[name], layout.remove(pane: pane) else { return }
+        layouts[name] = layout
+        if let id = layout.focusedSession { selectedSession[name] = id }
+    }
+
+    /// Rearranges into a template, the focused session in zone `focusZone`.
+    func applyTemplate(_ template: LayoutTemplate, focusZone: Int = 0, in name: String) {
+        guard var layout = layouts[name] else { return }
+        layout.apply(template, focusZone: focusZone, tabOrder: (sessions[name] ?? []).map(\.id))
+        layouts[name] = layout
+        if let id = layout.focusedSession { selectedSession[name] = id }
+    }
+
+    func moveDivider(_ divider: PaneDivider, to boundary: Double, in name: String) {
+        guard var layout = layouts[name],
+            layout.moveDivider(
+                divider.id, to: boundary, mode: paneResizeMode, length: divider.length,
+                minimumSize: PaneMetrics.minimumSize, gap: PaneMetrics.gap)
+        else { return }
+        layouts[name] = layout
+    }
+
+    /// The selected instance's layout, for the menu bar.
+    var selectedLayout: PaneLayout? { selection.flatMap { layouts[$0] } }
+
+    func applyTemplateToSelection(_ template: LayoutTemplate) {
+        guard let name = selection else { return }
+        applyTemplate(template, in: name)
+    }
+
+    func removeFocusedPane() {
+        guard let name = selection, let layout = layouts[name], layout.isSplit else { return }
+        removePane(layout.focused, in: name)
+    }
+
+    func equalizeSplit(at path: [Int], in name: String) {
+        guard var layout = layouts[name], layout.equalize(splitAt: path) else { return }
+        layouts[name] = layout
     }
 
     func setTerminalFontSize(_ size: CGFloat) {

@@ -36,14 +36,19 @@ public final class SessionIO: @unchecked Sendable {
         [stdinPipe.fileHandleForReading, stdoutPipe.fileHandleForWriting, nil]
     }
 
-    /// Streams everything the guest writes, on a reader thread of its own — the
-    /// consumer decides where it wants the bytes.
+    /// Streams everything the guest writes, read on a thread of its own and
+    /// delivered on `queue`: every chunk in the order it was read, and EOF only
+    /// after the last of them. A serial dispatch queue guarantees that order —
+    /// the same arrangement SwiftTerm's own `LocalProcess` uses — where a Swift
+    /// `Task` per chunk would not, and chunks could reach the screen shuffled.
     ///
     /// A plain blocking read loop rather than `FileHandle.readabilityHandler`:
     /// the handler delivers the first chunk and then stops re-arming on these
     /// pipes, which silently truncates a session's output.
     public func beginStreaming(
-        onOutput: @escaping @Sendable (Data) -> Void, onEOF: @escaping @Sendable () -> Void
+        on queue: DispatchQueue,
+        onOutput: @escaping @Sendable ([UInt8]) -> Void,
+        onEOF: @escaping @Sendable () -> Void
     ) {
         let descriptor = stdoutPipe.fileHandleForReading.fileDescriptor
         let thread = Thread {
@@ -53,11 +58,12 @@ public final class SessionIO: @unchecked Sendable {
                     Darwin.read(descriptor, $0.baseAddress, $0.count)
                 }
                 if count > 0 {
-                    onOutput(Data(buffer[0..<count]))
+                    let chunk = Array(buffer[0..<count])
+                    queue.async { onOutput(chunk) }
                     continue
                 }
                 if count < 0 && errno == EINTR { continue }
-                onEOF()
+                queue.async { onEOF() }
                 return
             }
         }
@@ -115,14 +121,15 @@ public final class AgentVMShellSession: @unchecked Sendable {
         self.io = io
     }
 
-    /// Starts the guest process and begins delivering its output on the main
-    /// queue. Call once.
+    /// Starts the guest process and begins delivering its output, in order, on
+    /// `queue` (the main queue unless you say otherwise). Call once.
     public func start(
-        onOutput: @escaping @Sendable (Data) -> Void,
+        on queue: DispatchQueue = .main,
+        onOutput: @escaping @Sendable ([UInt8]) -> Void,
         onEOF: @escaping @Sendable () -> Void
     ) async throws {
         guard let process else { return }
-        io.beginStreaming(onOutput: onOutput, onEOF: onEOF)
+        io.beginStreaming(on: queue, onOutput: onOutput, onEOF: onEOF)
         try await process.start()
         io.closeAfterStart()
     }

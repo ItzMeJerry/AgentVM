@@ -44,7 +44,9 @@ struct InstanceDetailView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 260)
+                // Its own width: a fixed one wider than the segments leaves the
+                // toolbar's glass with empty space at both ends.
+                .fixedSize()
             }
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
@@ -53,9 +55,7 @@ struct InstanceDetailView: View {
                     Label("New Session", systemImage: "terminal")
                 }
                 .disabled(!instance.isRunning)
-                .hoverHint(instance.isRunning
-                    ? "New Session (⌘T)\nOpen another shell in this instance."
-                    : "New Session (⌘T)\nStart the instance to open a shell.")
+                .featureTip("New shell session")
 
                 if instance.isRunning {
                     Button {
@@ -63,14 +63,14 @@ struct InstanceDetailView: View {
                     } label: {
                         Label("Stop", systemImage: "stop.fill")
                     }
-                    .hoverHint("Stop\nShut the VM down. Its sessions end until you start it again.")
+                    .featureTip("Stop instance")
                 } else {
                     Button {
                         Task { await model.start(instance) }
                     } label: {
                         Label("Start", systemImage: "play.fill")
                     }
-                    .hoverHint("Start\nBoot the VM again, with the network it was created with.")
+                    .featureTip("Start instance")
                 }
 
                 Button {
@@ -78,9 +78,7 @@ struct InstanceDetailView: View {
                 } label: {
                     Label("Ports", systemImage: "point.3.connected.trianglepath.dotted")
                 }
-                .hoverHint(instance.canEditPorts
-                    ? "Ports (⌥⌘P)\nForward ports on this Mac into the instance."
-                    : "Ports (⌥⌘P)\nSee forwarded ports. Stop the instance to change them.")
+                .featureTip("Port forwarding")
             }
             // A gap splits the destructive action into a glass capsule of its own.
             ToolbarSpacer(.fixed, placement: .primaryAction)
@@ -90,7 +88,7 @@ struct InstanceDetailView: View {
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
-                .hoverHint("Delete\nRemove this instance. Your mounted folders are kept.")
+                .featureTip("Delete instance")
             }
         }
         // A new session, from anywhere, is something you want to look at.

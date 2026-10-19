@@ -1,22 +1,15 @@
 //
 //  AgentVMTerminalView.swift
-//  SwiftTerm's view with trackpad handling that feels like Terminal.app.
+//  SwiftTerm's view, plus the gestures and menu the app adds on top of it.
 //
-//  Stock SwiftTerm turns every wheel event into 1, 3, 10 or a page of lines
-//  based on its coarse delta, so a trackpad flick jumps and a slow drag
-//  stutters, and inside vim or less a scroll does nothing at all. Here:
+//  Scrolling is SwiftTerm's own: line-accurate trackpad deltas, wheel reports to
+//  programs that track the mouse, and Alternate Scroll Mode (the wheel as arrow
+//  keys in less, man or git log). This file only adds what SwiftTerm leaves to
+//  the host app:
 //
-//  - precise (trackpad) deltas are accumulated in points and spent a line at
-//    a time, momentum included, so scrolling tracks the fingers;
-//  - when the program asked for mouse reporting, the wheel is reported to it;
-//  - on the alternate screen without mouse reporting (less, man, git log),
-//    the wheel becomes arrow keys, as Terminal.app does;
 //  - pinch zooms the font, a two-finger double tap resets it;
+//  - a three-finger swipe moves between sessions;
 //  - a right click (or two-finger click) opens a context menu.
-//
-//  SwiftTerm's `scrollWheel` is `public`, not `open`, so it can't be
-//  overridden from this module. Wheel events are routed in by one local event
-//  monitor instead — see `TerminalScrollRouter`.
 //
 //  AgentVM — https://github.com/ItzMeJerry/AgentVM
 //  Copyright 2026 Jerry Lan
@@ -34,8 +27,9 @@ final class AgentVMTerminalView: TerminalView {
     var onFontSizeRequest: ((CGFloat) -> Void)?
     /// A three-finger horizontal swipe: -1 previous session, +1 next.
     var onSwipe: ((Int) -> Void)?
+    /// A click landed in this terminal, so its pane should have the focus.
+    var onActivate: (() -> Void)?
 
-    private var pendingPoints: CGFloat = 0
     private var pendingMagnification: CGFloat = 0
 
     init(fontSize: CGFloat) {
@@ -43,7 +37,6 @@ final class AgentVMTerminalView: TerminalView {
             frame: CGRect(x: 0, y: 0, width: 640, height: 400),
             font: Self.font(ofSize: fontSize))
         menu = makeContextMenu()
-        TerminalScrollRouter.install()
     }
 
     required init?(coder: NSCoder) {
@@ -57,70 +50,6 @@ final class AgentVMTerminalView: TerminalView {
     func applyFontSize(_ size: CGFloat) {
         guard abs(font.pointSize - size) > 0.01 else { return }
         font = Self.font(ofSize: size)
-    }
-
-    // MARK: - Scrolling
-
-    /// The same arithmetic SwiftTerm uses for its rows.
-    private var lineHeight: CGFloat {
-        max(1, ceil(CTFontGetAscent(font) + CTFontGetDescent(font) + CTFontGetLeading(font)))
-    }
-
-    /// Returns false to let the event through untouched.
-    func handleScroll(_ event: NSEvent) -> Bool {
-        // A mostly sideways gesture is not a vertical scroll, and it may
-        // belong to a swipe the system is tracking.
-        guard abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX) else { return true }
-
-        if event.phase.contains(.began) || event.phase.contains(.mayBegin) {
-            pendingPoints = 0
-        }
-
-        let lines: Int
-        if event.hasPreciseScrollingDeltas {
-            pendingPoints += event.scrollingDeltaY
-            let whole = (pendingPoints / lineHeight).rounded(.towardZero)
-            pendingPoints -= whole * lineHeight
-            lines = Int(whole)
-        } else {
-            // A mouse wheel: deltas are already in (accelerated) lines, and
-            // a single slow notch must still move something.
-            let delta = event.scrollingDeltaY
-            lines = delta == 0 ? 0 : Int(delta.sign == .minus ? min(-1, delta.rounded()) : max(1, delta.rounded()))
-        }
-        guard lines != 0 else { return true }
-
-        let terminal = getTerminal()
-        if allowMouseReporting && terminal.mouseMode != .off {
-            reportWheel(lines: lines, event: event)
-        } else if terminal.isCurrentBufferAlternate {
-            // Momentum makes a full-screen app overshoot badly; the fingers
-            // are the only input here.
-            guard event.momentumPhase.isEmpty else { return true }
-            let up: [UInt8] = terminal.applicationCursor ? [0x1b, 0x4f, 0x41] : [0x1b, 0x5b, 0x41]
-            let down: [UInt8] = terminal.applicationCursor ? [0x1b, 0x4f, 0x42] : [0x1b, 0x5b, 0x42]
-            for _ in 0..<min(abs(lines), 12) { send(lines > 0 ? up : down) }
-        } else if lines > 0 {
-            scrollUp(lines: lines)
-        } else {
-            scrollDown(lines: -lines)
-        }
-        return true
-    }
-
-    private func reportWheel(lines: Int, event: NSEvent) {
-        let terminal = getTerminal()
-        let point = convert(event.locationInWindow, from: nil)
-        let cellWidth = max(1, bounds.width / CGFloat(max(terminal.cols, 1)))
-        let col = min(max(Int(point.x / cellWidth), 0), terminal.cols - 1)
-        let row = min(max(Int((bounds.height - point.y) / lineHeight), 0), terminal.rows - 1)
-        let flags = event.modifierFlags
-        let button = terminal.encodeButton(
-            button: lines > 0 ? 4 : 5, release: false,
-            shift: flags.contains(.shift), meta: flags.contains(.option), control: flags.contains(.control))
-        for _ in 0..<min(abs(lines), 12) {
-            terminal.sendEvent(buttonFlags: button, x: col, y: row)
-        }
     }
 
     // MARK: - Gestures
@@ -198,33 +127,15 @@ final class AgentVMTerminalView: TerminalView {
         needsDisplay = true
     }
 
+    override func mouseDown(with event: NSEvent) {
+        onActivate?()
+        super.mouseDown(with: event)
+    }
+
     override func menu(for event: NSEvent) -> NSMenu? {
         // A right click is a click: take focus so Paste lands here.
+        onActivate?()
         window?.makeFirstResponder(self)
         return super.menu(for: event)
-    }
-}
-
-/// Sends wheel events over a terminal to that terminal's handler before
-/// SwiftTerm's own `scrollWheel` sees them.
-@MainActor
-enum TerminalScrollRouter {
-    private static var monitor: Any?
-
-    static func install() {
-        guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { event in
-            guard let window = event.window, let content = window.contentView,
-                let hit = content.hitTest(content.convert(event.locationInWindow, from: nil))
-            else { return event }
-            var view: NSView? = hit
-            var terminal: AgentVMTerminalView?
-            while let current = view, terminal == nil {
-                terminal = (current as? AgentVMTerminalView) ?? (current as? TerminalContainerView)?.terminal
-                view = current.superview
-            }
-            guard let terminal, !terminal.isHiddenOrHasHiddenAncestor else { return event }
-            return terminal.handleScroll(event) ? nil : event
-        }
     }
 }

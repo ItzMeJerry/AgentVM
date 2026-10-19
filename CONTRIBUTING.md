@@ -29,16 +29,19 @@ shell scripts do.
 ## Layout
 
 ```
-Package.swift              container 1.3.0, containerization 0.41.0, SwiftTerm 1.11.2
+Package.swift              container 1.3.0, containerization 0.41.0, SwiftTerm 1.20.0
 Sources/AgentVMKit/            the engine — config, env registry, every daemon call.
                            No UI dependency; it builds and tests on its own.
+Sources/AgentVMLayout/     split panes — snapping, templates, dividers — as plain
+                           values, so every rule is a unit test away.
 Sources/AgentVMApp/            SwiftUI app, terminal sessions
 Tests/AgentVMKitTests/         the suite Scripts/test.sh runs
 Scripts/                   doctor, build, test, clean
 ```
 
-`AgentVMKit` must not import SwiftUI or AppKit. That separation is what lets the
-engine be tested without a window, and it is worth keeping.
+`AgentVMKit` and `AgentVMLayout` must not import SwiftUI or AppKit. That
+separation is what lets the engine and the pane layout be tested without a
+window, and it is worth keeping.
 
 ## Tests
 

@@ -47,6 +47,8 @@ final class TerminalSession: ObservableObject, Identifiable {
 
     private var session: AgentVMShellSession?
     private var waiter: Task<Void, Never>?
+    /// The most recent resize sent to the guest; the next one waits for it.
+    private var lastResize: Task<Void, Never>?
     /// The guest closed its end; everything it wrote has arrived.
     private var outputEnded = false
 
@@ -83,15 +85,18 @@ final class TerminalSession: ObservableObject, Identifiable {
                     environment: ["TERM=xterm-256color"])
                 self.session = session
 
-                // The output callback holds the view, not the session object, so a
-                // closed tab's session can be released as soon as its pipe ends.
+                // Output and EOF arrive on the main queue, in the order they were
+                // read, so they go straight to the view. The callback holds the
+                // view, not the session object, so a closed tab's session can be
+                // released as soon as its pipe ends.
                 let view = terminalView
                 try await session.start(
-                    onOutput: { data in
-                        Task { @MainActor in view.feed(byteArray: ArraySlice(data)) }
+                    on: .main,
+                    onOutput: { bytes in
+                        MainActor.assumeIsolated { view.feed(byteArray: bytes[...]) }
                     },
                     onEOF: { [weak self] in
-                        Task { @MainActor in self?.markEnded() }
+                        MainActor.assumeIsolated { self?.markEnded() }
                     })
                 state = .running
                 syncSize()
@@ -157,9 +162,16 @@ final class TerminalSession: ObservableObject, Identifiable {
         resize(cols: terminal.cols, rows: terminal.rows)
     }
 
+    /// Each resize waits for the one before it. A window drag produces a burst
+    /// of sizes; sent as independent tasks they could reach the guest in any
+    /// order and leave it with a stale one, which garbles wrapping and redraws.
     fileprivate func resize(cols: Int, rows: Int) {
         guard case .running = state, let session else { return }
-        Task { await session.resize(cols: cols, rows: rows) }
+        let previous = lastResize
+        lastResize = Task {
+            await previous?.value
+            await session.resize(cols: cols, rows: rows)
+        }
     }
 }
 
@@ -209,18 +221,35 @@ extension TerminalSession: TerminalViewDelegate {
 // MARK: - The view
 
 /// Hands SwiftUI the session's own terminal view, so tab switches keep state.
-/// Only the selected session is mounted; the view outlives the pane, so a tab
-/// that comes back has its scrollback, and it takes the keyboard on arrival.
+/// Only sessions on screen are mounted; the view outlives the pane, so a tab
+/// that comes back has its scrollback.
+///
+/// The focused pane takes the keyboard when it becomes the focused one — not
+/// on every redraw, which the two-second refresh would turn into stealing the
+/// keyboard from text fields.
 struct TerminalPane: NSViewRepresentable {
     let session: TerminalSession
+    let isFocused: Bool
+
+    final class Coordinator {
+        var wasFocused = false
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> TerminalContainerView {
         let container = TerminalContainerView(terminal: session.terminalView)
-        DispatchQueue.main.async { container.focusTerminal() }
+        context.coordinator.wasFocused = isFocused
+        if isFocused { DispatchQueue.main.async { container.focusTerminal() } }
         return container
     }
 
-    func updateNSView(_ view: TerminalContainerView, context: Context) {}
+    func updateNSView(_ view: TerminalContainerView, context: Context) {
+        if isFocused && !context.coordinator.wasFocused {
+            DispatchQueue.main.async { view.focusTerminal() }
+        }
+        context.coordinator.wasFocused = isFocused
+    }
 }
 
 /// Gives the terminal a margin in its own background color. A click or a
@@ -262,6 +291,11 @@ final class TerminalContainerView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        terminal.onActivate?()
         window?.makeFirstResponder(terminal)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        terminal.scrollWheel(with: event)
     }
 }

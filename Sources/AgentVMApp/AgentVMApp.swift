@@ -8,6 +8,7 @@
 //
 
 import AgentVMKit
+import AgentVMLayout
 import SwiftUI
 
 @main
@@ -52,6 +53,25 @@ struct AgentVMApplication: App {
                     }
                 }
 
+                Menu("Layout") {
+                    ForEach(LayoutTemplate.allCases) { template in
+                        Toggle(
+                            template.title,
+                            isOn: Binding(
+                                get: { model.selectedLayout?.matchingTemplate == template },
+                                set: { _ in model.applyTemplateToSelection(template) }))
+                    }
+                    Divider()
+                    Toggle(
+                        "Snap Dividers",
+                        isOn: Binding(
+                            get: { model.paneResizeMode == .snap },
+                            set: { model.paneResizeMode = $0 ? .snap : .free }))
+                    Button("Remove Pane from Split") { model.removeFocusedPane() }
+                        .disabled(model.selectedLayout?.isSplit != true)
+                }
+                .disabled(model.selectedLayout == nil)
+
                 Divider()
 
                 Button("Start") {
@@ -94,7 +114,13 @@ struct AgentVMApplication: App {
                     .keyboardShortcut("0")
                 Divider()
             }
+            HelpCommands()
         }
+
+        Window("AgentVM Help", id: "help") {
+            HelpView()
+        }
+        .windowResizability(.contentMinSize)
 
         Settings {
             SettingsView().environmentObject(model)
