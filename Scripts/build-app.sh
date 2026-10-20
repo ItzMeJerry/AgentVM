@@ -59,6 +59,31 @@ for bundle in "$BIN_DIR"/*.bundle; do
     cp -R "$bundle" "$APP/Contents/Resources/"
 done
 
+# SwiftTerm's Metal renderer loads the app's default Metal library before its
+# own, so AgentVM's copy of its shaders goes there: the one change in it is how
+# dark text is blended (see the file). Being a copy, it has to match the
+# SwiftTerm it was copied from, which this checks first.
+SHADERS="$ROOT/Sources/AgentVMApp/Shaders/TerminalShaders.metal"
+UPSTREAM_SHADERS="$ROOT/.build/checkouts/SwiftTerm/Sources/SwiftTerm/Apple/Metal/Shaders.metal"
+UPSTREAM_SHADERS_SHA256="5f9f1d64f238821d11e4eda5f33c933d85d4e7f124a2c3bd8a930f8726b2fc12" # SwiftTerm 1.20.0
+if [ ! -f "$UPSTREAM_SHADERS" ] ||
+    [ "$(shasum -a 256 "$UPSTREAM_SHADERS" | cut -d ' ' -f 1)" != "$UPSTREAM_SHADERS_SHA256" ]; then
+    cat >&2 <<MESSAGE
+error: SwiftTerm's Metal shaders are not the ones AgentVM's copy was made from.
+
+    $UPSTREAM_SHADERS
+    differs from SwiftTerm 1.20.0's. After a SwiftTerm upgrade, copy it over
+    Sources/AgentVMApp/Shaders/TerminalShaders.metal, make the change marked
+    "AgentVM:" in terminal_text_fragment_gray again, and put the new file's
+    SHA-256 in this script.
+MESSAGE
+    exit 1
+fi
+SHADER_BUILD="$(mktemp -d)"
+xcrun -sdk macosx metal -c "$SHADERS" -o "$SHADER_BUILD/TerminalShaders.air"
+xcrun -sdk macosx metallib "$SHADER_BUILD/TerminalShaders.air" -o "$APP/Contents/Resources/default.metallib"
+rm -rf "$SHADER_BUILD"
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

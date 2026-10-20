@@ -44,6 +44,9 @@ public struct AgentVMConfig: Sendable, Equatable {
     /// Empty = the daemon's own default (1 GiB). Suffixes: K M G T P.
     public var memory: String?
     public var envFilePath: String
+    /// The lock list. Not a key in the file: it sits beside it, and only tests
+    /// and the UI tour point it anywhere else.
+    public var lockFilePath: String
     public var namePrefix: String
 
     /// Lines the file had that we did not recognize, surfaced in Settings.
@@ -55,12 +58,16 @@ public struct AgentVMConfig: Sendable, Equatable {
     public static let defaultEnvFilePath = FileManager.default.homeDirectoryForCurrentUser
         .appending(path: ".config/agentvm/env", directoryHint: .notDirectory).path(percentEncoded: false)
 
+    public static let defaultLockFilePath = FileManager.default.homeDirectoryForCurrentUser
+        .appending(path: ".config/agentvm/locks", directoryHint: .notDirectory).path(percentEncoded: false)
+
     public init(
         net: NetPosture = .open,
         removeOnExit: Bool = false,
         cpus: Int? = nil,
         memory: String? = nil,
         envFilePath: String = AgentVMConfig.defaultEnvFilePath,
+        lockFilePath: String = AgentVMConfig.defaultLockFilePath,
         namePrefix: String = "agentvm-",
         warnings: [String] = []
     ) {
@@ -69,11 +76,13 @@ public struct AgentVMConfig: Sendable, Equatable {
         self.cpus = cpus
         self.memory = memory
         self.envFilePath = envFilePath
+        self.lockFilePath = lockFilePath
         self.namePrefix = namePrefix
         self.warnings = warnings
     }
 
     public var envFileURL: URL { URL(filePath: envFilePath) }
+    public var lockFileURL: URL { URL(filePath: lockFilePath) }
 
     // MARK: - Names
 

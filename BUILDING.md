@@ -26,8 +26,9 @@ open .build/AgentVM.app
 ### The Metal toolchain
 
 The terminal is [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm), which
-ships a Metal shader that the build compiles. The compiler for it is an
-optional Xcode component. Install it once:
+ships a Metal shader that the build compiles — and so does AgentVM, which
+builds its own copy of that shader into the app (see `TerminalShaders.metal`).
+The compiler for them is an optional Xcode component. Install it once:
 
 ```sh
 sudo /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -license accept
@@ -137,7 +138,10 @@ instances belong to the `container` daemon.
   reports the wheel to programs that track the mouse, and supports Alternate
   Scroll Mode (DECSET 1007), so the app uses it instead of reimplementing it.
   It is the last release before upstream's announced breaking changes, and it
-  needs the Metal toolchain above.
+  needs the Metal toolchain above. AgentVM ships a copy of its Metal shaders
+  with dark text blended the way macOS blends it, so bumping this pin means
+  copying the new `Shaders.metal` over that copy and redoing the one marked
+  change: `build-app.sh` stops until you do.
 
 `Package.resolved` is committed, so a clone builds the same graph you do.
 

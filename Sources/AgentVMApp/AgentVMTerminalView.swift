@@ -38,26 +38,37 @@ final class AgentVMTerminalView: TerminalView {
     var isGlass = false {
         didSet {
             guard isGlass != oldValue else { return }
-            // Resolved against this view's own appearance: outside drawing,
-            // the current one can be another — a dark background behind
-            // light-mode text.
-            effectiveAppearance.performAsCurrentDrawingAppearance { applyColors() }
+            applyColors()
             // The margin around the terminal is drawn by its container.
             superview?.needsDisplay = true
             needsDisplay = true
         }
     }
 
-    /// SwiftTerm's colours for the current appearance, at the opacity the
-    /// pane wants.
+    /// The colours for this view's appearance — black text in light mode,
+    /// white in dark — fixed, at the opacity the pane wants. A system colour
+    /// such as `textColor` is worked out wherever it's read, and the Metal
+    /// renderer reads outside any view's drawing, where the appearance is the
+    /// Mac's: a light window on a dark Mac got white text.
     func applyColors() {
-        configureNativeColors()
+        let appearance = effectiveAppearance
+        let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        appearance.performAsCurrentDrawingAppearance {
+            nativeForegroundColor = dark ? .white : .black
+            nativeBackgroundColor = Self.fixed(.textBackgroundColor)
+            selectedTextBackgroundColor = Self.fixed(.selectedTextBackgroundColor)
+            // The full accent rather than SwiftTerm's pale selection colour,
+            // which all but vanishes on light glass; the letter under it in
+            // the colour the system draws on the accent.
+            caretColor = Self.fixed(.controlAccentColor)
+            caretTextColor = Self.fixed(.alternateSelectedControlTextColor)
+        }
         backgroundOpacity = isGlass ? 0 : 1
-        // The full accent rather than SwiftTerm's pale selection colour,
-        // which all but vanishes on light glass; the letter under it in the
-        // colour the system draws on the accent.
-        caretColor = .controlAccentColor
-        caretTextColor = .alternateSelectedControlTextColor
+    }
+
+    /// A system colour as it is in the current appearance, no longer dynamic.
+    private static func fixed(_ color: NSColor) -> NSColor {
+        color.usingColorSpace(.sRGB) ?? color
     }
 
     init(fontSize: CGFloat) {
@@ -154,13 +165,41 @@ final class AgentVMTerminalView: TerminalView {
     // light and dark has to set them again.
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
-        effectiveAppearance.performAsCurrentDrawingAppearance { applyColors() }
+        applyColors()
         needsDisplay = true
     }
 
     override func mouseDown(with event: NSEvent) {
         onActivate?()
         super.mouseDown(with: event)
+    }
+
+    // MARK: - Renderer
+
+    /// Text drawn by SwiftTerm's Metal renderer, into a glyph atlas of its
+    /// own, rather than handed to Core Animation through CoreGraphics. On
+    /// macOS 27 that other path can abort the app the first time a launch
+    /// draws terminal text ("Function buffer_image_blit_frag_lph was not
+    /// found in the library") — 11 launches in 34 when measured; Metal, 0 in
+    /// 10.
+    var usesMetal = true {
+        didSet { if usesMetal != oldValue { applyRenderer() } }
+    }
+
+    /// Switched as the view joins a window: Metal needs one, and the first
+    /// frame isn't drawn until after this.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        // The window's appearance is the one that counts from here on.
+        if window != nil { applyColors() }
+        applyRenderer()
+    }
+
+    private func applyRenderer() {
+        guard window != nil else { return }
+        // Where Metal can't start — a Mac without a usable GPU, say — the
+        // view keeps drawing with CoreGraphics.
+        try? setUseMetal(usesMetal)
     }
 
     override func menu(for event: NSEvent) -> NSMenu? {

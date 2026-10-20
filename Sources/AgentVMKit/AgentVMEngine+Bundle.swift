@@ -1,12 +1,12 @@
 //
-//  AgentVMEngine+Ports.swift
-//  Changing the published ports of a stopped instance.
+//  AgentVMEngine+Bundle.swift
+//  Changing a stopped instance: its published ports, and its main process.
 //
-//  `container` 1.3.0 has no API for this: ports are fixed at `create`. But the
+//  `container` 1.3.0 has no API for either: both are fixed at `create`. But the
 //  runtime helper reads them from the container's bundle on every start
-//  (RuntimeService.bootstrap → Bundle.configuration → startSocketForwarders),
-//  so rewriting the bundle while the VM is down takes effect on the next
-//  Start. Files in <app-root>/containers/<id>/:
+//  (RuntimeService.bootstrap → Bundle.configuration → the init process and
+//  startSocketForwarders), so rewriting the bundle while the VM is down takes
+//  effect on the next Start. Files in <app-root>/containers/<id>/:
 //
 //    config.json                 what the runtime reads; written on first start
 //    runtime-configuration.json  the creation-time copy, the fallback when
@@ -18,8 +18,8 @@
 //  back if anything fails.
 //
 //  The daemon keeps its own in-memory copy of every configuration from when it
-//  booted, so `get` and `list` go on reporting the old ports until it
-//  restarts. The ports on disk are the ones that apply, and they are what
+//  booted, so `get` and `list` go on reporting the old ports and the old main
+//  process until it restarts. What's on disk is what applies, and it is what
 //  AgentVM shows.
 //
 //  AgentVM — https://github.com/ItzMeJerry/AgentVM
@@ -39,6 +39,49 @@ extension AgentVMEngine {
     public func setPorts(_ mappings: [PortMapping], on instance: AgentVMInstance) async throws {
         try PortMapping.validate(mappings)
         let ports = try mappings.map { try $0.publishPort() }
+        try await rewrite(instance, what: "the ports") { configuration in
+            configuration.publishedPorts = ports
+        } matches: { configuration in
+            configuration.publishedPorts.map(PortMapping.init) == mappings
+        }
+    }
+
+    /// Replaces an instance's main process, and with it the lifetime it
+    /// follows: the keepalive makes it an instance, a command makes it a task.
+    /// The instance must be stopped: the change applies when it next starts.
+    /// Everything else about the process — its environment, working
+    /// directory and user — stays as it was created.
+    public func setMainProcess(_ process: MainProcess, on instance: AgentVMInstance) async throws {
+        try await rewrite(instance, what: "the main process") { configuration in
+            configuration.initProcess.executable = process.executable
+            configuration.initProcess.arguments = process.arguments
+            configuration.labels["agentvm.mode"] = process.mode.rawValue
+        } matches: { configuration in
+            configuration.initProcess.executable == process.executable
+                && configuration.initProcess.arguments == process.arguments
+                && configuration.labels["agentvm.mode"] == process.mode.rawValue
+        }
+    }
+
+    /// What the bundle knows and the daemon's copy doesn't: the ports and
+    /// main process that apply on the next start, and whether the container
+    /// is one-shot. Where the bundle can't be read, the daemon's copy stands.
+    nonisolated func readingBundle(_ instance: AgentVMInstance, in containersRoot: URL?) -> AgentVMInstance {
+        guard let containersRoot else { return instance }
+        let files = BundleFiles(directory: containersRoot.appendingPathComponent(instance.fullName))
+        let options: ContainerCreateOptions? = try? files.decode(files.options)
+        return instance.applying(bundle: try? files.configuration()).withOneShot(options?.autoRemove)
+    }
+
+    /// Changes a stopped instance's configuration in both bundle files, reads
+    /// it back the way the daemon will, and puts the originals back if any of
+    /// that fails. `what` names the change in errors: "the ports".
+    private func rewrite(
+        _ instance: AgentVMInstance,
+        what: String,
+        change: (inout ContainerConfiguration) -> Void,
+        matches: (ContainerConfiguration) -> Bool
+    ) async throws {
         let bundle = try await bundleDirectory(for: instance.fullName)
         let files = BundleFiles(directory: bundle)
 
@@ -46,20 +89,20 @@ extension AgentVMEngine {
         if let options: ContainerCreateOptions = try? files.decode(files.options), options.autoRemove {
             throw AgentVMError(
                 "\(instance.shortName) is one-shot",
-                hint: "It is removed when it stops, so there is nothing to start with new ports.")
+                hint: "It is removed as it stops, so it never sits stopped for \(what) to change.")
         }
 
         let backup = try files.backUp(into: backupDirectory(for: instance.fullName))
         do {
             if FileManager.default.fileExists(atPath: files.config.path) {
                 var configuration: ContainerConfiguration = try files.decode(files.config)
-                configuration.publishedPorts = ports
+                change(&configuration)
                 try files.write(configuration, to: files.config)
             }
             if FileManager.default.fileExists(atPath: files.runtime.path) {
                 let runtime: RuntimeConfiguration = try files.decode(files.runtime)
                 if var configuration = runtime.containerConfiguration {
-                    configuration.publishedPorts = ports
+                    change(&configuration)
                     try files.write(
                         RuntimeConfiguration(
                             path: runtime.path,
@@ -73,14 +116,12 @@ extension AgentVMEngine {
                 }
             }
             // Read back exactly as the daemon will.
-            guard try files.ports() == mappings else {
-                throw AgentVMError("the ports read back differ from the ports written")
+            guard matches(try files.configuration()) else {
+                throw AgentVMError("what was read back differs from what was written")
             }
             if FileManager.default.fileExists(atPath: files.runtime.path) {
                 let runtime: RuntimeConfiguration = try files.decode(files.runtime)
-                if let configuration = runtime.containerConfiguration,
-                    configuration.publishedPorts.map(PortMapping.init) != mappings
-                {
+                if let configuration = runtime.containerConfiguration, !matches(configuration) {
                     throw AgentVMError("the fallback configuration read back differs from what was written")
                 }
             }
@@ -89,20 +130,13 @@ extension AgentVMEngine {
                 try files.restore(from: backup)
             } catch let restoreError {
                 throw AgentVMError(
-                    "could not change the ports of \(instance.shortName), and could not put the old files back",
+                    "could not change \(what) of \(instance.shortName), and could not put the old files back",
                     hint: "\(error)\n\nRestore failed: \(restoreError)\nThe originals are in \(backup.path).")
             }
             throw AgentVMError(
-                "could not change the ports of \(instance.shortName); nothing was changed",
+                "could not change \(what) of \(instance.shortName); nothing was changed",
                 hint: "\(error)")
         }
-    }
-
-    /// The ports that apply on the next start, read from the bundle. Nil when
-    /// the bundle can't be read, so the caller keeps the daemon's copy.
-    nonisolated func diskPorts(for fullName: String, in containersRoot: URL?) -> [PortMapping]? {
-        guard let containersRoot else { return nil }
-        return try? BundleFiles(directory: containersRoot.appendingPathComponent(fullName)).ports()
     }
 
     // MARK: - Safety
@@ -114,7 +148,7 @@ extension AgentVMEngine {
         guard snapshot.status == .stopped else {
             throw AgentVMError(
                 "\(fullName) is \(snapshot.status.rawValue)",
-                hint: "Stop it first. Ports are read when the VM boots.")
+                hint: "Stop it first. Ports and the main process are read when the VM boots.")
         }
         let handler = (try? files.configuration().runtimeHandler) ?? snapshot.configuration.runtimeHandler
         let service = RuntimeClient.machServiceLabel(runtime: handler, id: fullName)
@@ -171,10 +205,6 @@ private struct BundleFiles {
             throw AgentVMError("runtime-configuration.json has no container configuration")
         }
         return configuration
-    }
-
-    func ports() throws -> [PortMapping] {
-        try configuration().publishedPorts.map(PortMapping.init)
     }
 
     /// Atomic, and in the bundle's own encoding: `JSONEncoder` with default

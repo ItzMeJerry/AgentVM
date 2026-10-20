@@ -69,7 +69,7 @@ struct PortsSheet: View {
                     live.isRunning
                         ? "\(live.shortName) is running. Stop it to change its ports; its sessions end."
                         : "\(live.shortName) is \(live.stateLabel). Ports can change once it has stopped.",
-                    systemImage: "lock.fill")
+                    systemImage: "stop.circle")
                 Spacer()
                 if live.isRunning {
                     Button("Stop") { Task { await model.stop(live) } }

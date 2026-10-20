@@ -83,15 +83,23 @@ struct InstanceDetailView: View {
                 }
                 .featureTip("Port forwarding")
             }
-            // A gap splits the destructive action into a glass capsule of its own.
+            // A gap gives the destructive action a glass capsule of its own,
+            // shared with the lock that holds it off.
             ToolbarSpacer(.fixed, placement: .primaryAction)
-            ToolbarItem(placement: .primaryAction) {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Toggle(isOn: Binding(get: { locked }, set: { model.setLocked($0, instance) })) {
+                    Label("Lock", systemImage: locked ? "lock.fill" : "lock.open")
+                }
+                .disabled(!locked && !instance.canLock)
+                .featureTip(locked ? "Locked" : "Lock instance")
+
                 Button(role: .destructive) {
-                    model.pendingDelete = instance
+                    model.requestDelete(instance)
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
-                .featureTip("Delete instance")
+                .disabled(locked)
+                .featureTip(locked ? "Locked: unlock it to delete it" : "Delete instance")
             }
         }
         // A new session, from anywhere, is something you want to look at.
@@ -105,10 +113,14 @@ struct InstanceDetailView: View {
         #endif
     }
 
-    /// State, posture when it's the killswitch, image, and address while there
-    /// is one: what you'd otherwise look for in a header.
+    private var locked: Bool { model.isLocked(instance) }
+
+    /// State, whether it's locked, posture when it's the killswitch, image,
+    /// and address while there is one: what you'd otherwise look for in a
+    /// header.
     private var subtitle: String {
         var parts = [instance.stateLabel]
+        if locked { parts.append("locked") }
         if instance.net == .killswitch { parts.append("killswitch") }
         parts.append(instance.imageDisplayName)
         if let address = instance.ipv4 { parts.append(address) }

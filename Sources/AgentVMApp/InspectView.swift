@@ -19,7 +19,8 @@ struct InspectView: View {
             Section {
                 LabeledContent("Mode", value: instance.mode == .instance ? "Instance" : "Task")
                 LabeledContent("Main process") {
-                    Text(instance.command.joined(separator: " "))
+                    // Quoted the way it splits, so it reads as it would be typed.
+                    Text(ShellWords.join(instance.command))
                         .font(.callout.monospaced())
                         .textSelection(.enabled)
                 }
@@ -27,10 +28,40 @@ struct InspectView: View {
                 if let started = instance.startedAt {
                     LabeledContent("Started", value: started.formatted(date: .abbreviated, time: .shortened))
                 }
+                // One row, as for ports: when it can change, and the way to.
+                if !instance.isOneShot {
+                    LabeledContent {
+                        Button(instance.canChangeMainProcess ? "Change…" : "Main Process…") {
+                            model.editingMainProcess = instance
+                        }
+                    } label: {
+                        Text(
+                            instance.canChangeMainProcess
+                                ? "What it runs changes on the next start."
+                                : "Stop it to change what it runs."
+                        )
+                        .foregroundStyle(.secondary)
+                    }
+                }
             } header: {
                 Text("Lifetime")
             } footer: {
                 Text(instance.lifetimeDescription)
+            }
+
+            Section {
+                Toggle(isOn: Binding(get: { locked }, set: { model.setLocked($0, instance) })) {
+                    Label("Locked", systemImage: locked ? "lock.fill" : "lock.open")
+                }
+                .disabled(!locked && !instance.canLock)
+            } header: {
+                Text("Lock")
+            } footer: {
+                Text(
+                    !locked && !instance.canLock
+                        ? "A one-shot task removes itself as its command finishes, so there's nothing for a lock to keep."
+                        : "Prune leaves a locked instance alone, and Delete refuses it until it's unlocked. Only AgentVM knows about the lock: container prune in Terminal doesn't."
+                )
             }
 
             Section {
@@ -149,4 +180,6 @@ struct InspectView: View {
         }
         .formStyle(.grouped)
     }
+
+    private var locked: Bool { model.isLocked(instance) }
 }

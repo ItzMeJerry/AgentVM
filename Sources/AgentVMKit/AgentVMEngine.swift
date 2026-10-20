@@ -110,14 +110,14 @@ public actor AgentVMEngine {
         return
             snapshots
             .filter { config.isAgentVMName($0.id) }
-            .map { AgentVMInstance(snapshot: $0, config: config).withPorts(diskPorts(for: $0.id, in: root)) }
+            .map { readingBundle(AgentVMInstance(snapshot: $0, config: config), in: root) }
             .sorted { $0.fullName < $1.fullName }
     }
 
     public func instance(named fullName: String, config: AgentVMConfig) async throws -> AgentVMInstance {
         let snapshot = try await containers.get(id: fullName)
         let root = await containersRoot()
-        return AgentVMInstance(snapshot: snapshot, config: config).withPorts(diskPorts(for: fullName, in: root))
+        return readingBundle(AgentVMInstance(snapshot: snapshot, config: config), in: root)
     }
 
     /// `<app-root>/containers`, where each container's bundle lives.
@@ -284,6 +284,10 @@ public actor AgentVMEngine {
             if spec.net == .killswitch { try? await networks.delete(id: networkName) }
             throw error
         }
+        // A new instance starts unlocked, even under the name of a locked one
+        // removed behind AgentVM's back. Only now is the name certainly this
+        // container's: had it been taken, create would have failed.
+        try? InstanceLocks(url: config.lockFileURL).unlock(fullName)
 
         progress("Booting")
         do {
@@ -328,8 +332,11 @@ public actor AgentVMEngine {
         try await containers.stop(id: instance.fullName)
     }
 
-    /// Removes the instance and, with it, its killswitch network.
-    public func delete(_ instance: AgentVMInstance, force: Bool) async throws {
+    /// Removes the instance and, with it, its killswitch network. A locked
+    /// instance is refused, whatever `force` says, and so is every instance
+    /// while the lock list can't be read.
+    public func delete(_ instance: AgentVMInstance, force: Bool, config: AgentVMConfig) async throws {
+        try InstanceLocks(url: config.lockFileURL).ensureUnlocked(instance.fullName, shortName: instance.shortName)
         if instance.state == .running && !force {
             throw AgentVMError(
                 "\(instance.fullName) is running",
@@ -346,36 +353,48 @@ public actor AgentVMEngine {
     public struct PruneResult: Sendable {
         public let containers: [String]
         public let networks: [String]
+        /// Locked, so left alone.
+        public let kept: [String]
         public let failures: [String]
     }
 
-    /// Removes every AgentVM container and every AgentVM killswitch network — and only
-    /// those: names without the prefix are never touched.
+    /// Removes every AgentVM container that isn't locked, and every AgentVM
+    /// killswitch network but a locked instance's — and only those: names
+    /// without the prefix are never touched.
     public func prune(config: AgentVMConfig) async throws -> PruneResult {
+        // The lock list before anything else: if it can't be read, nothing is
+        // removed.
+        let locked = try InstanceLocks(url: config.lockFileURL).names()
+        let plan = PrunePlan(
+            containers: try await containers.list().map(\.id),
+            networks: try await networks.list().map(\.id),
+            locked: locked,
+            config: config)
+
         var removedContainers: [String] = []
         var removedNetworks: [String] = []
         var failures: [String] = []
 
-        for snapshot in try await containers.list() where config.isAgentVMName(snapshot.id) {
+        for id in plan.containers {
             do {
-                try await containers.delete(id: snapshot.id, force: true)
-                removedContainers.append(snapshot.id)
+                try await containers.delete(id: id, force: true)
+                removedContainers.append(id)
             } catch {
-                failures.append("\(snapshot.id): \(error)")
+                failures.append("\(id): \(error)")
             }
         }
         // Containers first: a network cannot be deleted while a container still
         // references it.
-        for network in try await networks.list() where config.isAgentVMNetworkName(network.id) {
+        for id in plan.networks {
             do {
-                try await networks.delete(id: network.id)
-                removedNetworks.append(network.id)
+                try await networks.delete(id: id)
+                removedNetworks.append(id)
             } catch {
-                failures.append("\(network.id): \(error)")
+                failures.append("\(id): \(error)")
             }
         }
         return PruneResult(
-            containers: removedContainers, networks: removedNetworks, failures: failures)
+            containers: removedContainers, networks: removedNetworks, kept: plan.kept, failures: failures)
     }
 
     // MARK: - Networks

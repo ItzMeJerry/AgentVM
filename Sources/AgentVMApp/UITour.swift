@@ -11,10 +11,14 @@
 //
 //  The tour works in a world of its own: names under `agentvmtour-`, so it
 //  neither sees nor touches real instances; a throwaway env registry with
-//  made-up values, so no secret can end up in a picture; and the default
-//  preferences — text size, reading interval — neither read nor saved. It
-//  creates what it shows from alpine:3.20, saves a PNG per screen, deletes
-//  it all and quits.
+//  made-up values, so no secret can end up in a picture; a lock list of its
+//  own; and the default preferences — text size, reading interval — neither
+//  read nor saved. It creates what it shows from alpine:3.20, saves a PNG per
+//  screen, deletes it all and quits.
+//
+//  Terminals draw with SwiftTerm's Metal renderer, as they do in the app: the
+//  CoreGraphics one could abort the tour inside Core Animation the moment
+//  its first session drew text (a macOS 27 bug).
 //
 //  Each shot is the window as the window server composites it, Liquid Glass
 //  included. Only the app's own windows are captured, which needs no
@@ -30,6 +34,7 @@
 import AgentVMKit
 import AgentVMLayout
 import AppKit
+import Metal
 import SwiftUI
 
 @MainActor
@@ -48,6 +53,8 @@ enum UITour {
         ProcessInfo.processInfo.environment["AGENTVM_UI_TOUR"].map { URL(filePath: $0, directoryHint: .isDirectory) }
     }
 
+    private static let locks = FileManager.default.temporaryDirectory.appending(path: "agentvm-tour-locks")
+
     static func run(model: AppModel, in directory: URL) async {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var log: [String] = []
@@ -56,9 +63,12 @@ enum UITour {
         // A world of its own.
         let registry = FileManager.default.temporaryDirectory.appending(path: "agentvm-tour-env")
         try? "API_KEY=example\nGITHUB_TOKEN=example\n".write(to: registry, atomically: true, encoding: .utf8)
+        // A run that was cut short may have left its locks behind.
+        try? FileManager.default.removeItem(at: locks)
         var config = AgentVMConfig()
         config.namePrefix = "agentvmtour-"
         config.envFilePath = registry.path(percentEncoded: false)
+        config.lockFilePath = locks.path(percentEncoded: false)
         model.config = config
         switch ProcessInfo.processInfo.environment["AGENTVM_UI_TOUR_APPEARANCE"] {
         case "light": NSApp.appearance = NSAppearance(named: .aqua)
@@ -77,6 +87,7 @@ enum UITour {
 
         await wait { model.daemon?.running == true }
         await model.refresh()
+
         // Long enough for the first frame to reach the screen.
         await pause(2.5)
         await shot(window, "01-empty-state", in: directory)
@@ -96,6 +107,10 @@ enum UITour {
             finish(log, in: directory)
             return
         }
+        // The one in use is the one worth keeping: locked, it shows its
+        // badge in the sidebar, its lock in the toolbar and Inspect, and
+        // Prune keeps it.
+        model.setLocked(true, demo)
 
         model.selection = demo.fullName
         tab("Sessions")
@@ -125,11 +140,27 @@ enum UITour {
         model.applyTemplate(.quarters, in: demo.fullName)
         await pause(1.5)
         await shot(window, "05-split-quarters-with-empty-zone", in: directory)
+        let metal = model.sessions[demo.fullName]?.allSatisfy { $0.terminalView.isUsingMetalRenderer } ?? false
+        note("sessions drawn with Metal: \(metal)")
+        // SwiftTerm takes the app's default library when it has every
+        // function it needs; this one is in AgentVM's copy only.
+        let ours = MTLCreateSystemDefaultDevice()?.makeDefaultLibrary()?.functionNames
+            .contains("agentvm_terminal_shaders") ?? false
+        note("AgentVM's terminal shaders in the app: \(ours)")
 
         // Something for the dashboard to show: a core kept busy for a while,
-        // and a burst of writes.
-        model.sessions[demo.fullName]?.first?.terminalView.send(
-            txt: "timeout 60 sh -c 'while :; do :; done' & dd if=/dev/zero of=/tmp/tour bs=1M count=256; rm /tmp/tour\n")
+        // and a burst of writes. A process of its own inside the instance,
+        // with no terminal on screen to draw it.
+        var load: AgentVMShellSession?
+        do {
+            let busy = "timeout 60 sh -c 'while :; do :; done' & dd if=/dev/zero of=/tmp/tour bs=1M count=256; rm /tmp/tour; wait"
+            let session = try await model.engine.openSession(
+                in: demo, command: ["sh", "-c", busy], workingDirectory: nil, environment: [])
+            try await session.start(on: DispatchQueue(label: "agentvmtour.load"), onOutput: { _ in }, onEOF: {})
+            load = session
+        } catch {
+            note("no load for the dashboard: \(error.agentVMDisplayMessage)")
+        }
         model.selection = AppModel.dashboardID
         // Readings every second for these shots, which also checks that a
         // change of pace carries the lines on. The tour never saves it.
@@ -185,6 +216,7 @@ enum UITour {
         model.instances = live.instances
         model.startPolling()
 
+        load?.terminate()
         model.selection = demo.fullName
         model.applyTemplate(.single, in: demo.fullName)
         // Coming from the dashboard, the instance's view has to exist before
@@ -205,9 +237,44 @@ enum UITour {
             await shot(window, "10-stopped-instance", in: directory)
         }
 
+        // Prune, which names the locked instance it keeps. The dialog is a
+        // sheet — a window of its own, its glass see-through — so it's
+        // photographed over the window it belongs to. It's put away
+        // unanswered.
+        model.showingPrune = true
+        await pause(1.2)
+        if let sheet = window.attachedSheet {
+            save([sheet, window], to: directory.appending(path: "10b-prune-keeps-locked.png"))
+        } else {
+            note("no prune dialog to photograph")
+        }
+        model.showingPrune = false
+        await pause(0.8)
+
+        // What it runs, changed while it's stopped, the way the sheet's Save
+        // does it: it becomes a task, and Inspect shows the command it will
+        // run at its next start.
+        if let stopped = model.instances.first(where: { $0.shortName == "offline" }),
+            let task = try? MainProcess(mode: .task, command: ["sh", "-c", "echo hello from a new main process"])
+        {
+            if let failure = await model.setMainProcess(task, on: stopped, thenStart: false) {
+                note("main process: \(failure)")
+            }
+            tab("Inspect")
+            await pause(1.2)
+            await shot(window, "10c-main-process-changed", in: directory)
+        }
+
         // Sheets and windows, each in a window of its own.
         await render(NewInstanceSheet().environmentObject(model), "11-new-instance", in: directory)
         await render(PortsSheet(instance: demo).environmentObject(model), "12-ports", in: directory)
+        if let offline = model.instances.first(where: { $0.shortName == "offline" }) {
+            // Stopped, so it can change: shown part-way to becoming a task.
+            await render(
+                MainProcessSheet(instance: offline, draft: (.task, "python3 -m http.server 8000"))
+                    .environmentObject(model),
+                "12b-main-process", in: directory)
+        }
         await render(SettingsView().environmentObject(model), "13-settings", in: directory)
         await render(HelpView(), "14-help", in: directory)
         await render(
@@ -237,11 +304,17 @@ enum UITour {
         for session in model.sessions.values.joined() { model.closeSession(session) }
         await model.refresh()
         for instance in model.instances where instance.fullName.hasPrefix("agentvmtour-") {
+            if model.isLocked(instance) { model.setLocked(false, instance) }
             await model.delete(instance, force: true)
+            // Changing what it runs backed its bundle up beside yours.
+            try? FileManager.default.removeItem(
+                at: FileManager.default.homeDirectoryForCurrentUser
+                    .appending(path: ".config/agentvm/backups/\(instance.fullName)", directoryHint: .isDirectory))
         }
     }
 
     private static func finish(_ log: [String], in directory: URL) {
+        try? FileManager.default.removeItem(at: locks)
         try? log.joined(separator: "\n").write(to: directory.appending(path: "tour.log"), atomically: true, encoding: .utf8)
         NSApp.terminate(nil)
     }
@@ -293,6 +366,22 @@ enum UITour {
             let image = createImage(.null, includingWindow, UInt32(window.windowNumber), ignoreFramingAtBestResolution)?
                 .takeRetainedValue()
         else { return }
+        try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: url)
+    }
+
+    /// Several of the app's windows composited together, front first — a
+    /// sheet over its window. Looked up at run time for the same reason.
+    private static func save(_ windows: [NSWindow], to url: URL) {
+        typealias CreateImage = @convention(c) (CGRect, CFArray, UInt32) -> Unmanaged<CGImage>?
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGWindowListCreateImageFromArray") else {
+            return
+        }
+        let createImage = unsafeBitCast(symbol, to: CreateImage.self)
+        // Bare window numbers, not CFNumbers: that's what the call reads.
+        var ids = windows.map { UnsafeRawPointer(bitPattern: UInt($0.windowNumber)) }
+        guard let array = CFArrayCreate(nil, &ids, ids.count, nil) else { return }
+        let ignoreFramingAtBestResolution: UInt32 = (1 << 0) | (1 << 3)
+        guard let image = createImage(.null, array, ignoreFramingAtBestResolution)?.takeRetainedValue() else { return }
         try? NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])?.write(to: url)
     }
 

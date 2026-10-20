@@ -94,16 +94,31 @@ struct AgentVMApplication: App {
                 .keyboardShortcut("p", modifiers: [.command, .option])
                 .disabled(model.selectedInstance == nil)
 
+                Button("Main Process…", systemImage: "gearshape.2") {
+                    if let instance = model.selectedInstance { model.editingMainProcess = instance }
+                }
+                .disabled(model.selectedInstance.map(\.isOneShot) ?? true)
+
                 Divider()
+
+                if let instance = model.selectedInstance, model.isLocked(instance) {
+                    Button("Unlock", systemImage: "lock.open") { model.setLocked(false, instance) }
+                } else {
+                    Button("Lock", systemImage: "lock") {
+                        if let instance = model.selectedInstance { model.setLocked(true, instance) }
+                    }
+                    .disabled(model.selectedInstance?.canLock != true)
+                }
 
                 Button("Delete…", systemImage: "trash") {
-                    if let instance = model.selectedInstance { model.pendingDelete = instance }
+                    if let instance = model.selectedInstance { model.requestDelete(instance) }
                 }
-                .disabled(model.selectedInstance == nil)
+                .disabled(model.selectedInstance.map { model.isLocked($0) } ?? true)
 
                 Divider()
 
-                Button("Prune All AgentVM Instances…", systemImage: "xmark.bin") { model.showingPrune = true }
+                Button(model.pruneMenuTitle, systemImage: "xmark.bin") { model.showingPrune = true }
+                    .disabled(model.prunePlan.containers.isEmpty)
             }
             CommandGroup(before: .toolbar) {
                 Button("Dashboard", systemImage: "gauge.with.dots.needle.33percent") {
@@ -126,8 +141,8 @@ struct AgentVMApplication: App {
                 Button("Actual Size", systemImage: "textformat.size") {
                     model.setTerminalFontSize(AgentVMTerminalView.defaultFontSize)
                 }
-                Toggle("Sessions as Glass", isOn: $model.glassSessions)
                     .keyboardShortcut("0")
+                Toggle("Sessions as Glass", isOn: $model.glassSessions)
                 Divider()
             }
             HelpCommands()

@@ -65,7 +65,7 @@ why the three dependencies are pinned exactly, and what to do when a build goes 
 | Drag the line between panes | resize them; it snaps to halves, thirds and quarters unless Dividers is set to Free. Double-click to even out |
 | Drag a pane's header onto the tab bar, or click its × | take it out of the split; the session stays a tab |
 | Right click in a session | Copy, Paste, Select All, Clear Scrollback, text size |
-| Swipe an instance in the sidebar | right to start or stop it, left to delete it |
+| Swipe an instance in the sidebar | right to start or stop it, left to delete or lock it (a locked one offers Unlock) |
 | Double-click an instance | open a shell in it, starting it first if it's stopped |
 | Drop folders on Mounts | add them as mounts in New Instance |
 | Logs | scroll up to pause following, scroll back to the end to resume; ⌘F to search |
@@ -86,7 +86,11 @@ The app links `apple/container`'s own client libraries and calls them directly:
 | this Mac's CPU, memory and disk | Mach `host_statistics`, `sysctl` and volume resource values, in-process |
 
 `AgentVMKit` is the whole engine and has no UI dependency; `AgentVMApp` is SwiftUI plus
-[SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) for the terminal. The package pins
+[SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) for the terminal, drawn with its Metal
+renderer: its CoreGraphics one can make the app quit on macOS 27 the first time a terminal
+draws text, a Core Animation bug (Settings > Sessions switches back). The app ships its own
+copy of the renderer's shaders, which blend dark text the way macOS does, so light-mode
+text looks like any other Mac app's. The package pins
 `container` **1.3.0**: the XPC routes are versioned with the release, so the client and the
 daemon you have installed must agree. Upgrade the daemon, bump the pin.
 
@@ -103,6 +107,14 @@ container stops and stays in `stopped` (VM torn down, no CPU or RAM) until you d
 The mode is recorded on the container as the `agentvm.mode` label, so the app always knows
 which lifetime rules apply — and so does `container inspect`, if you want to look from
 outside.
+
+**What it runs can change.** Stop an instance and choose **Main Process…** — in Inspect, its
+right-click menu or the Instance menu — to give it a command, which makes it a task, or to
+go back to the keepalive, which makes it an instance again. The command runs exactly as
+written, not through a shell (`sh -c '…'` for pipes or variables), and the image's
+entrypoint isn't put in front of it. The change applies on the next Start, the same way
+ports do (below), and `container inspect` shows the old command and mode until the
+container service restarts. Its environment, working directory and user stay as created.
 
 ## What it guarantees
 
@@ -131,6 +143,9 @@ no kernel with each other or with the host. Not namespaces, not Seatbelt.
 default), and the app only ever lists, deletes or prunes names carrying it. Your other
 containers keep their names and stay out of its way.
 
+**A locked instance stays.** Prune leaves it alone, and Delete refuses it until you unlock
+it. See [Locks](#locks).
+
 **A shared env registry.** `~/.config/agentvm/env`, mode 0600, injected into every instance
 created from then on. Per-instance variables override it. A running instance keeps the
 environment baked in at creation — the app flags instances whose environment predates the
@@ -143,10 +158,10 @@ current registry rather than pretending they picked it up.
 `127.0.0.1` only; name `0.0.0.0` to open it to your network. A killswitch instance can
 publish ports too: they let this Mac connect in, and give the guest no route out.
 
-`container` fixes ports at creation and has no API to change them. But its runtime reads
-them from the container's bundle every time the VM boots, so AgentVM changes them **while the
-instance is stopped** by rewriting `config.json` and `runtime-configuration.json` in
-`<app-root>/containers/<name>/`:
+`container` fixes ports — and the main process — at creation and has no API to change them.
+But its runtime reads both from the container's bundle every time the VM boots, so AgentVM
+changes them **while the instance is stopped** by rewriting `config.json` and
+`runtime-configuration.json` in `<app-root>/containers/<name>/`:
 
 - It refuses unless the daemon reports the instance stopped *and* launchd no longer holds
   its runtime helper (checked by Mach service lookup, not `launchctl`).
@@ -160,6 +175,25 @@ instance is stopped** by rewriting `config.json` and `runtime-configuration.json
 
 The daemon keeps an in-memory copy of each configuration, so `container inspect` shows the
 old ports until it restarts. The app reads the bundle and shows the ports that apply.
+
+## Locks
+
+Lock the instances you use every day, and Prune clears out everything else. **Lock** is in an
+instance's right-click menu, its toolbar, the Instance menu and Inspect, or swipe left on it
+in the sidebar. A lock beside its name marks it, and a locked instance runs, stops and opens
+sessions as usual. Prune keeps it, and its killswitch network with it, and says which
+instances it's keeping before it starts. Delete stays off until you unlock it.
+
+- Locks are kept in `~/.config/agentvm/locks`, one container name per line. They're
+  AgentVM's own, not container labels, because labels are fixed at creation and you'll
+  want to lock an instance while it runs. Edit the file by hand if you like: the app picks
+  up the change within a couple of seconds.
+- If the file is there but can't be read, Prune and Delete refuse to touch anything until
+  it can. A lock list that can't be read is never treated as empty.
+- A new instance starts unlocked, even if an old lock in the file has its name. That
+  happens when a locked instance is deleted in Terminal behind AgentVM's back.
+- A one-shot task can't be locked. It removes itself as soon as its command finishes, and
+  a lock couldn't stop that.
 
 ## Dashboard
 
@@ -216,6 +250,9 @@ NAME_PREFIX=agentvm-      # the app only touches names with this prefix
   (`sudo softwareupdate --install-rosetta`). Don't enable it for arm64 images.
 - Images that declare `VOLUME` can leave anonymous volumes behind; Prune deliberately does
   not touch volumes. `container volume list` to check.
+- **Only AgentVM honours a lock.** `container delete` and `container prune` in Terminal
+  don't know about AgentVM's locks. `container prune` removes every stopped container,
+  locked or not, though it never touches a running one.
 
 ## Layout
 
@@ -233,7 +270,8 @@ LICENSE, NOTICE            Apache 2.0, and the credit anything built on AgentVM 
 ```
 
 `Scripts/test.sh` runs the tests. They cover the logic that decides what reaches the
-system — port specs, the config file, the env registry, mount refusals, name rules —
+system — port specs, the config file, the env registry, mount refusals, name rules, the
+lock list and what Prune keeps —
 against temporary directories only: nothing in `~/.config/agentvm` is read or written, and no
 container is created.
 

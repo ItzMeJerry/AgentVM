@@ -17,11 +17,12 @@ Swift client libraries — `ContainerClient`, `NetworkClient`, `Utility`,
 `ClientHealthCheck` — over XPC to `com.apple.container.apiserver`.
 
 Where there is no API for something, the answer is to use the daemon's own types
-against its own files, not to spawn its CLI. `AgentVMEngine+Ports.swift` is the
-worked example: `container` 1.3.0 fixes published ports at creation, so AgentVM
-rewrites the container bundle while the VM is down, using the daemon's own
-`Codable` types and encoder, and checks whether launchd still holds the runtime
-helper with a Mach `bootstrap_look_up` rather than by running `launchctl`.
+against its own files, not to spawn its CLI. `AgentVMEngine+Bundle.swift` is the
+worked example: `container` 1.3.0 fixes published ports and the main process at
+creation, so AgentVM rewrites the container bundle while the VM is down, using the
+daemon's own `Codable` types and encoder, and checks whether launchd still holds
+the runtime helper with a Mach `bootstrap_look_up` rather than by running
+`launchctl`.
 
 The shell scripts in `Scripts/` are build tooling, not the app. They can do what
 shell scripts do.
@@ -34,7 +35,8 @@ Sources/AgentVMKit/            the engine — config, env registry, every daemon
                            No UI dependency; it builds and tests on its own.
 Sources/AgentVMLayout/     split panes — snapping, templates, dividers — as plain
                            values, so every rule is a unit test away.
-Sources/AgentVMApp/            SwiftUI app, terminal sessions
+Sources/AgentVMApp/            SwiftUI app, terminal sessions; Shaders/ is SwiftTerm's
+                           Metal shaders with dark text blended as macOS does it
 Tests/AgentVMKitTests/         the suite Scripts/test.sh runs
 Scripts/                   doctor, build, test, clean
 ```
@@ -46,7 +48,8 @@ window, and it is worth keeping.
 ## Tests
 
 Anything that decides what reaches the system belongs under test: port specs,
-config parsing, the env registry, mount refusals, name rules. Those tests run
+config parsing, the env registry, mount refusals, name rules, how a typed command
+splits into arguments, the lock list and what Prune keeps. Those tests run
 against temporary directories — no daemon, no VM, no network, and nothing in
 `~/.config/agentvm` read or written.
 

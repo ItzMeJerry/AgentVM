@@ -23,13 +23,31 @@ struct SidebarView: View {
                 ForEach(model.instances) { instance in
                     InstanceRow(instance: instance)
                         .tag(instance.fullName)
-                        // Two-finger swipes, as in Mail: left to delete,
-                        // right to start or stop.
+                        // Two-finger swipes, as in Mail: left to delete or
+                        // lock, right to start or stop. A locked instance
+                        // offers its unlock where Delete would be.
                         .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                            Button(role: .destructive) {
-                                model.pendingDelete = instance
-                            } label: {
-                                Label("Delete", systemImage: "trash")
+                            if model.isLocked(instance) {
+                                Button {
+                                    model.setLocked(false, instance)
+                                } label: {
+                                    Label("Unlock", systemImage: "lock.open")
+                                }
+                                .tint(.indigo)
+                            } else {
+                                Button(role: .destructive) {
+                                    model.requestDelete(instance)
+                                } label: {
+                                    Label("Delete", systemImage: "trash")
+                                }
+                                if instance.canLock {
+                                    Button {
+                                        model.setLocked(true, instance)
+                                    } label: {
+                                        Label("Lock", systemImage: "lock")
+                                    }
+                                    .tint(.indigo)
+                                }
                             }
                         }
                         .swipeActions(edge: .leading, allowsFullSwipe: true) {
@@ -94,10 +112,10 @@ struct SidebarView: View {
                 Menu {
                     Button("Refresh Now", systemImage: "arrow.clockwise") { Task { await model.refresh() } }
                     Divider()
-                    Button("Prune All AgentVM Instances…", systemImage: "trash", role: .destructive) {
+                    Button(model.pruneMenuTitle, systemImage: "trash", role: .destructive) {
                         model.showingPrune = true
                     }
-                    .disabled(model.instances.isEmpty)
+                    .disabled(model.prunePlan.containers.isEmpty)
                 } label: {
                     // The glass is already the circle: no enclosed symbol.
                     Label("More", systemImage: "ellipsis")
@@ -121,6 +139,12 @@ struct SidebarView: View {
         Button(instance.canEditPorts ? "Edit Ports…" : "Ports…", systemImage: "point.3.connected.trianglepath.dotted") {
             model.editingPorts = instance
         }
+        Button(
+            instance.canChangeMainProcess ? "Edit Main Process…" : "Main Process…", systemImage: "gearshape.2"
+        ) {
+            model.editingMainProcess = instance
+        }
+        .disabled(instance.isOneShot)
         Divider()
         Button("Copy IP Address", systemImage: "network") {
             NSPasteboard.general.clearContents()
@@ -132,7 +156,14 @@ struct SidebarView: View {
             NSPasteboard.general.setString(instance.fullName, forType: .string)
         }
         Divider()
-        Button("Delete…", systemImage: "trash", role: .destructive) { model.pendingDelete = instance }
+        if model.isLocked(instance) {
+            Button("Unlock", systemImage: "lock.open") { model.setLocked(false, instance) }
+        } else {
+            Button("Lock", systemImage: "lock") { model.setLocked(true, instance) }
+                .disabled(!instance.canLock)
+        }
+        Button("Delete…", systemImage: "trash", role: .destructive) { model.requestDelete(instance) }
+            .disabled(model.isLocked(instance))
     }
 }
 
@@ -144,9 +175,14 @@ struct InstanceRow: View {
         HStack(spacing: 9) {
             StateDot(state: instance.stateLabel)
             VStack(alignment: .leading, spacing: 2) {
-                Text(instance.shortName)
-                    .font(.body.weight(.medium))
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(instance.shortName)
+                        .font(.body.weight(.medium))
+                        .lineLimit(1)
+                    if model.isLocked(instance) {
+                        LockBadge()
+                    }
+                }
                 HStack(spacing: 5) {
                     Text(instance.imageDisplayName)
                         .lineLimit(1)
@@ -179,6 +215,18 @@ struct InstanceRow: View {
             }
         }
         .padding(.vertical, 3)
+    }
+}
+
+/// Marks a locked instance, beside its name.
+struct LockBadge: View {
+    var body: some View {
+        Image(systemName: "lock.fill")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .help("Locked: Prune leaves it alone, and Delete waits until it's unlocked")
+            .accessibilityLabel("Locked")
+            .transition(.scale.combined(with: .opacity))
     }
 }
 
@@ -225,7 +273,7 @@ struct DaemonStatusBar: View {
                     .textSelection(.enabled)
                     .padding(.leading, 14)
             }
-            if let error = model.lastRefreshError {
+            ForEach([model.lastRefreshError, model.lockError].compactMap { $0 }, id: \.self) { error in
                 Text(error)
                     .font(.caption2)
                     .foregroundStyle(.orange)

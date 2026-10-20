@@ -131,6 +131,49 @@ public struct RunSpec: Sendable {
     static let keepaliveArguments = ["-c", "while :; do sleep 3600; done"]
 }
 
+/// What an instance runs as its main process, and with it the lifetime it
+/// follows: the keepalive for an instance, a command for a task. What
+/// Main Process writes into a stopped instance's bundle.
+public struct MainProcess: Sendable, Equatable {
+    public let mode: AgentVMMode
+    public let executable: String
+    public let arguments: [String]
+
+    /// Runs until the instance is stopped.
+    public static let keepalive = MainProcess(
+        mode: .instance, executable: RunSpec.keepaliveEntrypoint, arguments: RunSpec.keepaliveArguments)
+
+    private init(mode: AgentVMMode, executable: String, arguments: [String]) {
+        self.mode = mode
+        self.executable = executable
+        self.arguments = arguments
+    }
+
+    /// An instance runs the keepalive, whatever `command` says. A task runs
+    /// its command exactly as given — first the program, then its arguments,
+    /// and no image entrypoint in front — and stops when it finishes.
+    public init(mode: AgentVMMode, command: [String]) throws {
+        guard mode == .task else {
+            self = .keepalive
+            return
+        }
+        guard let program = command.first else {
+            throw AgentVMError("a task needs a command — the command is its main process")
+        }
+        guard !program.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw AgentVMError("a command starts with the program to run, not a blank")
+        }
+        // The keepalive by hand is an instance in all but name.
+        if command == Self.keepalive.command {
+            self = .keepalive
+            return
+        }
+        self.init(mode: .task, executable: program, arguments: Array(command.dropFirst()))
+    }
+
+    public var command: [String] { [executable] + arguments }
+}
+
 public enum AgentVMNaming {
     /// The charset a container (and, under the same name, its network) may use.
     public static func validateShortName(_ name: String, posture: NetPosture) throws {

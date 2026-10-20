@@ -1,8 +1,8 @@
 //
 //  HelpView.swift
-//  Help > AgentVM Help: what each toolbar button does, in full, and how split
-//  panes work. The buttons' tooltips only name them; this is where the detail
-//  lives.
+//  Help > AgentVM Help: what each toolbar button and instance action does, in
+//  full, and how split panes work. The buttons' tooltips only name them; this
+//  is where the detail lives.
 //
 //  AgentVM — https://github.com/ItzMeJerry/AgentVM
 //  Copyright 2026 Jerry Lan
@@ -34,8 +34,14 @@ struct HelpView: View {
             symbol: "point.3.connected.trianglepath.dotted", name: "Ports", shortcut: "⌥⌘P",
             detail: "Forwards ports on this Mac into the instance. While the instance is running you can see the forwarded ports; stop it to change them."),
         Entry(
+            symbol: "gearshape.2", name: "Main process", shortcut: nil,
+            detail: "What the instance runs. An instance runs a keepalive until you stop it; a task runs a command and stops when it finishes. Stop it, then choose Main Process… in Inspect, its right-click menu or the Instance menu to switch between the two or change the command. The change applies on the next start."),
+        Entry(
+            symbol: "lock", name: "Lock", shortcut: nil,
+            detail: "Keeps an instance you rely on: Prune leaves it alone, and Delete waits until you unlock it. It still starts, stops and opens sessions, and a lock beside its name marks it. Lock and Unlock are also in its right-click menu and Inspect, and a left swipe in the sidebar. Only AgentVM honours a lock: container prune in Terminal removes stopped containers regardless."),
+        Entry(
             symbol: "trash", name: "Delete", shortcut: nil,
-            detail: "Removes the instance. Your mounted folders are kept."),
+            detail: "Removes the instance. Your mounted folders are kept. A locked instance has to be unlocked first."),
     ]
 
     private static let sidebarButtons = [
@@ -43,8 +49,8 @@ struct HelpView: View {
             symbol: "plus", name: "New Instance", shortcut: "⌘N",
             detail: "Boots a new Linux VM. You choose its image, network, mounts and environment before it starts."),
         Entry(
-            symbol: "ellipsis.circle", name: "More", shortcut: nil,
-            detail: "Prune removes every AgentVM instance and its network, and nothing else. Refresh re-reads the list from the container service."),
+            symbol: "ellipsis", name: "More", shortcut: nil,
+            detail: "Prune removes every AgentVM instance that isn't locked, and its network, and nothing else. Refresh re-reads the list from the container service."),
     ]
 
     private static let dashboard = [
@@ -86,7 +92,7 @@ struct HelpView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                section("Instance toolbar", Self.instanceButtons)
+                section("Instance", Self.instanceButtons)
                 section("Sidebar toolbar", Self.sidebarButtons)
                 section("Dashboard", Self.dashboard)
                 section("Sessions", Self.sessionLook)

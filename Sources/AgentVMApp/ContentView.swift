@@ -49,17 +49,19 @@ struct ContentView: View {
             PortsSheet(instance: instance)
                 .environmentObject(model)
         }
+        .sheet(item: $model.editingMainProcess) { instance in
+            MainProcessSheet(instance: instance)
+                .environmentObject(model)
+        }
         .confirmationDialog(
-            "Remove every AgentVM instance?",
+            model.prunePlan.kept.isEmpty ? "Remove every AgentVM instance?" : "Remove every unlocked AgentVM instance?",
             isPresented: $model.showingPrune,
             titleVisibility: .visible
         ) {
             Button("Prune", role: .destructive) { Task { await model.prune() } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(
-                "Every container named '\(model.config.namePrefix)…' is removed, along with its killswitch network. Containers without the prefix are never touched, and writable mounts are left alone."
-            )
+            Text(pruneMessage)
         }
         .confirmationDialog(
             "Delete \(model.pendingDelete?.shortName ?? "")?",
@@ -91,6 +93,26 @@ struct ContentView: View {
             }
         }
         .animation(.bouncy(duration: 0.35), value: model.busy)
+    }
+
+    /// The rule, led by the locked instances it keeps, named.
+    private var pruneMessage: String {
+        let prefix = model.config.namePrefix
+        let rule =
+            "Containers without the prefix are never touched, and writable mounts are left alone."
+        let kept = model.prunePlan.kept.map(model.config.shortName)
+        guard !kept.isEmpty else {
+            return "Every container named '\(prefix)…' is removed, along with its killswitch network. \(rule)"
+        }
+        let stays = kept.count == 1 ? "is locked, so it stays" : "are locked, so they stay"
+        return "\(Self.listed(kept)) \(stays). Every other container named '\(prefix)…' is removed, along with its killswitch network. \(rule)"
+    }
+
+    /// "coder", "coder and web", "coder, web, and 3 more".
+    static func listed(_ names: [String], limit: Int = 3) -> String {
+        guard names.count > limit else { return names.formatted(.list(type: .and)) }
+        let shown = Array(names.prefix(limit - 1))
+        return (shown + ["\(names.count - shown.count) more"]).formatted(.list(type: .and))
     }
 }
 

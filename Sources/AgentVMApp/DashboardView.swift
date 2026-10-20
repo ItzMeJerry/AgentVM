@@ -807,6 +807,13 @@ private struct InstanceUsageRow: View {
             } else {
                 Button("Start", systemImage: "play.fill") { Task { await model.start(instance) } }
             }
+            // The figures say which instances you lean on; this keeps them.
+            if model.isLocked(instance) {
+                Button("Unlock", systemImage: "lock.open") { model.setLocked(false, instance) }
+            } else {
+                Button("Lock", systemImage: "lock") { model.setLocked(true, instance) }
+                    .disabled(!instance.canLock)
+            }
         }
     }
 
@@ -814,9 +821,14 @@ private struct InstanceUsageRow: View {
         HStack(spacing: 9) {
             StateDot(state: instance.stateLabel)
             VStack(alignment: .leading, spacing: 2) {
-                Text(instance.shortName)
-                    .font(.body.weight(.medium))
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(instance.shortName)
+                        .font(.body.weight(.medium))
+                        .lineLimit(1)
+                    if model.isLocked(instance) {
+                        LockBadge()
+                    }
+                }
                 // The process count goes first when the column is narrow.
                 ViewThatFits(in: .horizontal) {
                     Text(statusLine(withProcesses: true))

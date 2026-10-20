@@ -121,6 +121,16 @@ private struct SessionSettings: View {
                     "Only the terminal's own background turns to glass: text, the cursor, selections and coloured output stay solid. With Reduce Transparency on in Accessibility settings, the glass turns opaque."
                 )
             }
+            Section {
+                Toggle(isOn: $model.metalSessions) {
+                    Text("Draw with Metal")
+                    Text("Terminal text is drawn on the GPU by SwiftTerm's own renderer.")
+                }
+            } footer: {
+                Text(
+                    "Turn it off only if text looks wrong. The other renderer can make AgentVM quit the first time a terminal draws text, because of a bug in macOS 27."
+                )
+            }
         }
         .formStyle(.grouped)
     }

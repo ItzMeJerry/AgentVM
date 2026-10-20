@@ -14,7 +14,8 @@ public struct AgentVMInstance: Identifiable, Sendable, Equatable {
     public let fullName: String
     public let shortName: String
     public let state: RuntimeStatus
-    public let mode: AgentVMMode
+    /// As it applies on the next start: it changes with the main process.
+    public private(set) var mode: AgentVMMode
     public let net: NetPosture
     public let image: String
     public let architecture: String
@@ -26,12 +27,15 @@ public struct AgentVMInstance: Identifiable, Sendable, Equatable {
     public let startedAt: Date?
     public let mounts: [MountDisplay]
     public let envKeys: [String]
-    public let command: [String]
+    /// The main process, program first, as it runs on the next start.
+    public private(set) var command: [String]
     public let rosetta: Bool
     /// The dedicated internal network, for a killswitch instance.
     public let networkName: String?
     /// Host ports forwarded into the guest, as they apply on the next start.
     public private(set) var ports: [PortMapping]
+    /// Removed by the daemon as it stops: a task created one-shot.
+    public private(set) var isOneShot = false
 
     public var id: String { fullName }
 
@@ -92,22 +96,41 @@ public struct AgentVMInstance: Identifiable, Sendable, Equatable {
         self.networkName =
             NetPosture(rawValue: configuration.labels["agentvm.net"] ?? "") == .killswitch
             ? config.networkName(for: configuration.id) : nil
-        // The daemon's copy, which is stale after an edit; see `withPorts`.
+        // The daemon's copy, which is stale after an edit; see `applying(bundle:)`.
         self.ports = configuration.publishedPorts.map(PortMapping.init)
     }
 
-    /// The ports read from the container's bundle, which is what the runtime
-    /// uses at start — the daemon's in-memory copy only refreshes when it restarts.
-    func withPorts(_ ports: [PortMapping]?) -> AgentVMInstance {
-        guard let ports else { return self }
+    /// The configuration in the container's bundle, which is what the runtime
+    /// uses at start — the daemon's in-memory copy only refreshes when it
+    /// restarts. What changes while an instance is stopped comes from here.
+    func applying(bundle configuration: ContainerConfiguration?) -> AgentVMInstance {
+        guard let configuration else { return self }
         var copy = self
-        copy.ports = ports
+        copy.ports = configuration.publishedPorts.map(PortMapping.init)
+        copy.command = [configuration.initProcess.executable] + configuration.initProcess.arguments
+        copy.mode = AgentVMMode(rawValue: configuration.labels["agentvm.mode"] ?? "") ?? .task
+        return copy
+    }
+
+    /// Read from the bundle's options, which the daemon keeps apart from the
+    /// configuration it reports.
+    func withOneShot(_ oneShot: Bool?) -> AgentVMInstance {
+        guard let oneShot else { return self }
+        var copy = self
+        copy.isOneShot = oneShot
         return copy
     }
 
     /// Ports can change only while no VM is running. (A one-shot never sits
     /// stopped: it is removed as it stops.)
     public var canEditPorts: Bool { state == .stopped }
+
+    /// The main process, likewise: it's read when the VM boots.
+    public var canChangeMainProcess: Bool { state == .stopped }
+
+    /// A lock keeps an instance until it's unlocked. A one-shot task removes
+    /// itself as its command finishes, which no lock of AgentVM's can stop.
+    public var canLock: Bool { !isOneShot }
 
     public var memoryDescription: String {
         ByteCountFormatter.string(fromByteCount: Int64(memoryBytes), countStyle: .memory)
@@ -119,7 +142,9 @@ public struct AgentVMInstance: Identifiable, Sendable, Equatable {
         case .instance:
             "Runs until you stop it — shell sessions are independent processes."
         case .task:
-            "Stops when its command finishes; then persists as 'stopped' until deleted."
+            isOneShot
+                ? "One-shot: removed as soon as its command finishes."
+                : "Stops when its command finishes; then persists as 'stopped' until deleted."
         }
     }
 }

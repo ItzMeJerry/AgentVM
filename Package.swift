@@ -73,6 +73,9 @@ let package = Package(
                 "AgentVMLayout",
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
             ],
+            // Compiled by Scripts/build-app.sh into the app's default Metal
+            // library, where SwiftTerm looks first.
+            exclude: ["Shaders"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         // Everything here runs without a daemon, a VM or a network: the tests

@@ -63,13 +63,32 @@ final class AppModel: ObservableObject {
         }
     }
     private static let glassSessionsKey = "glassSessions"
+    /// Terminals drawn by SwiftTerm's Metal renderer — the default — or by
+    /// CoreGraphics, which on macOS 27 can make the app quit the first time
+    /// it draws terminal text. Remembered across launches.
+    @Published var metalSessions: Bool {
+        didSet {
+            if Self.remembersPreferences { UserDefaults.standard.set(metalSessions, forKey: Self.metalSessionsKey) }
+            for session in sessions.values.joined() { session.terminalView.usesMetal = metalSessions }
+        }
+    }
+    private static let metalSessionsKey = "metalSessions"
     /// Instances whose baked-in environment predates the current registry.
     @Published var staleEnvironment: Set<String> = []
+    /// Locked instances, by container name: Prune leaves them alone and Delete
+    /// refuses them. Re-read on every refresh, so a hand edit to the file
+    /// shows up too.
+    @Published var lockedNames: Set<String> = []
+    /// Why the lock list can't be read, while it can't. The engine refuses
+    /// Prune and Delete until it can.
+    @Published var lockError: String?
     /// The instance a Delete is waiting on confirmation for, from wherever it
     /// was asked: the header, the sidebar's menu, or a swipe.
     @Published var pendingDelete: AgentVMInstance?
     /// The instance whose Ports sheet is open.
     @Published var editingPorts: AgentVMInstance?
+    /// The instance whose Main Process sheet is open.
+    @Published var editingMainProcess: AgentVMInstance?
     /// One size for every terminal, so a pinch in one tab doesn't leave the
     /// others behind. Remembered across launches.
     @Published var terminalFontSize: CGFloat {
@@ -136,6 +155,7 @@ final class AppModel: ObservableObject {
         paneResizeMode = ResizeMode(rawValue: defaults?.string(forKey: Self.resizeModeKey) ?? "") ?? .snap
         samplingInterval = SamplingInterval.validated(defaults?.double(forKey: Self.samplingIntervalKey) ?? 0)
         glassSessions = defaults?.object(forKey: Self.glassSessionsKey) as? Bool ?? true
+        metalSessions = defaults?.object(forKey: Self.metalSessionsKey) as? Bool ?? true
     }
 
     var selectedInstance: AgentVMInstance? {
@@ -164,6 +184,7 @@ final class AppModel: ObservableObject {
     }
 
     func refresh() async {
+        readLocks()
         let status = await engine.daemonStatus()
         daemon = status
         guard status.running else {
@@ -246,7 +267,7 @@ final class AppModel: ObservableObject {
         busy = "Removing \(instance.shortName)"
         defer { busy = nil }
         do {
-            try await engine.delete(instance, force: force)
+            try await engine.delete(instance, force: force, config: config)
             endSessions(for: instance.fullName)
             sessions[instance.fullName] = nil
             layouts[instance.fullName] = nil
@@ -263,6 +284,24 @@ final class AppModel: ObservableObject {
         busy = "Changing the ports of \(instance.shortName)"
         do {
             try await engine.setPorts(ports, on: instance)
+        } catch {
+            busy = nil
+            return error.agentVMDisplayMessage
+        }
+        busy = nil
+        await refresh()
+        if thenStart, let updated = instances.first(where: { $0.fullName == instance.fullName }) {
+            await start(updated)
+        }
+        return nil
+    }
+
+    /// Replaces a stopped instance's main process, optionally starting it
+    /// straight after. Returns the failure for the sheet to show in place.
+    func setMainProcess(_ process: MainProcess, on instance: AgentVMInstance, thenStart: Bool) async -> String? {
+        busy = "Changing what \(instance.shortName) runs"
+        do {
+            try await engine.setMainProcess(process, on: instance)
         } catch {
             busy = nil
             return error.agentVMDisplayMessage
@@ -293,6 +332,55 @@ final class AppModel: ObservableObject {
             }
         } catch {
             report(error, title: "Could not prune")
+        }
+    }
+
+    // MARK: - Locks
+
+    func isLocked(_ instance: AgentVMInstance) -> Bool { lockedNames.contains(instance.fullName) }
+
+    func setLocked(_ locked: Bool, _ instance: AgentVMInstance) {
+        let locks = InstanceLocks(url: config.lockFileURL)
+        do {
+            if locked { try locks.lock(instance.fullName) } else { try locks.unlock(instance.fullName) }
+        } catch {
+            report(error, title: locked ? "Could not lock \(instance.shortName)" : "Could not unlock \(instance.shortName)")
+        }
+        withAnimation(.snappy) { readLocks() }
+    }
+
+    /// Where every Delete starts — the header, a menu, a swipe — so a locked
+    /// instance gets an answer rather than a confirmation it would refuse.
+    func requestDelete(_ instance: AgentVMInstance) {
+        guard !isLocked(instance) else {
+            alert = AppAlert(
+                title: "\(instance.shortName) is locked",
+                message: "Unlock it first. While it's locked, Delete refuses it and Prune leaves it alone.")
+            return
+        }
+        pendingDelete = instance
+    }
+
+    /// What Prune would remove and keep, as things stand. The engine reads
+    /// the lock list again when it runs.
+    var prunePlan: PrunePlan {
+        PrunePlan(containers: instances.map(\.fullName), locked: lockedNames, config: config)
+    }
+
+    var pruneMenuTitle: String {
+        prunePlan.kept.isEmpty ? "Prune All AgentVM Instances…" : "Prune Unlocked Instances…"
+    }
+
+    private func readLocks() {
+        do {
+            let names = try InstanceLocks(url: config.lockFileURL).names()
+            // Read every couple of seconds: only a change is published.
+            if names != lockedNames { lockedNames = names }
+            if lockError != nil { lockError = nil }
+        } catch {
+            // The last list read stays on screen.
+            let message = error.agentVMDisplayMessage
+            if lockError != message { lockError = message }
         }
     }
 
@@ -332,6 +420,7 @@ final class AppModel: ObservableObject {
         let name = instance.fullName
         let session = TerminalSession(instanceName: name, command: command, fontSize: terminalFontSize)
         session.terminalView.isGlass = glassSessions
+        session.terminalView.usesMetal = metalSessions
         let id = session.id
         session.terminalView.onFontSizeRequest = { [weak self] size in self?.setTerminalFontSize(size) }
         session.terminalView.onSwipe = { [weak self] offset in self?.selectAdjacentSession(offset, in: name) }

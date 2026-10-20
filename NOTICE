@@ -3,3 +3,7 @@ Copyright 2026 Jerry Lan
 
 This product includes software from AgentVM (https://github.com/ItzMeJerry/AgentVM),
 licensed under the Apache License, Version 2.0.
+
+Sources/AgentVMApp/Shaders/TerminalShaders.metal is adapted from SwiftTerm
+(https://github.com/migueldeicaza/SwiftTerm), Copyright (c) 2019-2026 Miguel de
+Icaza and contributors, under the MIT License; the full notice is in that file.

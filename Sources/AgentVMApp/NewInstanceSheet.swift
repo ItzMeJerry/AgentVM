@@ -67,6 +67,9 @@ struct NewInstanceSheet: View {
             if creating, let busy = model.busy {
                 ProgressView().controlSize(.small)
                 Text(busy).font(.callout).foregroundStyle(.secondary)
+            } else if let problem = commandProblem {
+                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+                Text(problem).font(.callout).lineLimit(2)
             }
             Spacer()
             Button("Cancel") { dismiss() }
@@ -75,7 +78,8 @@ struct NewInstanceSheet: View {
             Button(creating ? "Creating…" : "Create") { create() }
                 .keyboardShortcut(.defaultAction)
                 .buttonStyle(.glassProminent)
-                .disabled(creating || spec.image.trimmingCharacters(in: .whitespaces).isEmpty)
+                .disabled(
+                    creating || spec.image.trimmingCharacters(in: .whitespaces).isEmpty || commandProblem != nil)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
@@ -270,7 +274,7 @@ struct NewInstanceSheet: View {
         spec.cpus = Int(cpusText.trimmingCharacters(in: .whitespaces))
         let memory = memoryText.trimmingCharacters(in: .whitespaces)
         spec.memory = memory.isEmpty ? nil : memory
-        spec.command = Self.splitCommand(commandText)
+        spec.command = (try? ShellWords.split(commandText)) ?? []
         spec.env = spec.env.filter { !$0.key.trimmingCharacters(in: .whitespaces).isEmpty }
         spec.mounts = spec.mounts.filter { !$0.hostPath.isEmpty || !$0.guestPath.isEmpty }
 
@@ -282,33 +286,15 @@ struct NewInstanceSheet: View {
         }
     }
 
-    /// Splits a typed command the way a shell would for the simple cases, so
-    /// `sh -c 'make test'` arrives as three arguments rather than five.
-    static func splitCommand(_ text: String) -> [String] {
-        var arguments: [String] = []
-        var current = ""
-        var quote: Character?
-        var escaped = false
-        for character in text {
-            if escaped {
-                current.append(character)
-                escaped = false
-            } else if character == "\\" {
-                escaped = true
-            } else if let open = quote {
-                if character == open { quote = nil } else { current.append(character) }
-            } else if character == "'" || character == "\"" {
-                quote = character
-            } else if character.isWhitespace {
-                if !current.isEmpty {
-                    arguments.append(current)
-                    current = ""
-                }
-            } else {
-                current.append(character)
-            }
+    /// Why the task's command can't be split into arguments, while it can't —
+    /// a quote left open, say. `sh -c 'make test'` is three arguments.
+    private var commandProblem: String? {
+        guard spec.mode == .task else { return nil }
+        do {
+            _ = try ShellWords.split(commandText)
+            return nil
+        } catch {
+            return error.localizedDescription
         }
-        if !current.isEmpty { arguments.append(current) }
-        return arguments
     }
 }
