@@ -21,11 +21,15 @@ public struct AgentVMError: LocalizedError, Sendable {
 
     public var errorDescription: String? { message }
     public var recoverySuggestion: String? { hint }
+
+    /// The container system service didn't answer.
+    static let serviceUnreachable = AgentVMError(
+        "cannot reach the container system service", hint: "Start it with `container system start`, then try again.")
 }
 
 extension Error {
-    /// A message fit for a UI alert, unwrapping the layers the container client
-    /// wraps around the underlying failure.
+    /// A message fit for a UI alert: an AgentVM error's message and hint, and
+    /// any other error as it describes itself.
     public var agentVMDisplayMessage: String {
         if let error = self as? AgentVMError {
             guard let hint = error.hint else { return error.message }

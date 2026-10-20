@@ -27,14 +27,14 @@ enum ChartRange: String, CaseIterable, Identifiable {
 }
 
 struct InstanceUsageView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     let instance: AgentVMInstance
-    @ObservedObject var monitor: ResourceMonitor
-    @AppStorage("instanceChartRange") private var range: ChartRange = .twoMinutes
+    let monitor: ResourceMonitor
     /// The moment the pointer is on, in whichever chart: every chart marks it.
     @State private var scrub: Date?
     @State private var width: CGFloat = 1_000
 
+    private var range: ChartRange { model.chartRange }
     private var history: ResourceHistory? { instance.isRunning ? monitor.histories[instance.fullName] : nil }
     private var points: [ResourcePoint] {
         guard let history, let end = history.latest?.time else { return [] }
@@ -48,7 +48,7 @@ struct InstanceUsageView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 10) {
-                    Picker("Range", selection: $range) {
+                    Picker("Range", selection: Bindable(model).chartRange) {
                         ForEach(ChartRange.allCases) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
@@ -76,6 +76,8 @@ struct InstanceUsageView: View {
             .frame(maxWidth: .infinity)
             .onGeometryChange(for: CGFloat.self) { $0.size.width - 40 } action: { width = $0 }
         }
+        // Its bundle's size is read for this page alone.
+        .onAppear { monitor.pageAppeared(model) }
         #if DEBUG
             .onReceive(NotificationCenter.default.publisher(for: UITour.scrubTo)) { note in
                 scrub = (note.object as? Double).map { start.addingTimeInterval(range.seconds * $0) }
@@ -84,14 +86,14 @@ struct InstanceUsageView: View {
     }
 
     /// The window's subtitle while the page is up: state, how long it's been
-    /// up, and what it was given.
+    /// up, how many processes it runs, what it was given, and its image.
     static func subtitle(for instance: AgentVMInstance, history: ResourceHistory?) -> String {
         var parts = [instance.stateLabel]
         if instance.isRunning, let started = instance.startedAt {
             parts.append("up \(ResourceFormat.uptime(Date().timeIntervalSince(started)))")
         }
         if instance.isRunning, let processes = history?.latest?.processes {
-            parts.append(processes == 1 ? "1 process" : "\(processes) processes")
+            parts.append(ResourceFormat.processes(processes))
         }
         parts.append(instance.cpus == 1 ? "1 CPU" : "\(instance.cpus) CPUs")
         parts.append(instance.memoryDescription)
@@ -123,15 +125,10 @@ struct InstanceUsageView: View {
 
     /// The reading the pointer is on, or else the latest.
     private var shown: ResourcePoint? {
-        if let scrub, let point = points.min(by: { distance($0.time, scrub) < distance($1.time, scrub) }) {
-            return point
-        }
-        return points.last
+        scrub.flatMap { points.nearest(to: $0) } ?? points.last
     }
 
     private var scrubbing: Bool { scrub != nil && shown != nil }
-
-    private func distance(_ a: Date, _ b: Date) -> TimeInterval { abs(a.timeIntervalSince(b)) }
 
     /// "18s ago" while the pointer is on a chart, or else `detail`.
     private func detail(_ detail: String) -> String {
@@ -153,7 +150,7 @@ struct InstanceUsageView: View {
                 } ?? "No reading yet")
         ) {
             HistoryChart(
-                points: series(\.cpuShare), start: start, end: end, top: 1, axis: ResourceFormat.percent,
+                points: series(\.cpuShare), start: start, end: end, top: 1, format: .percent,
                 scrub: $scrub)
         }
         .help("How busy it is, as a share of the CPUs it was given")
@@ -169,7 +166,7 @@ struct InstanceUsageView: View {
         ) {
             HistoryChart(
                 points: series { $0.memoryUsed.map(Double.init) }, start: start, end: end, top: Double(limit),
-                axis: { ResourceFormat.memory(bytes($0)) }, scrub: $scrub)
+                format: .memory, scrub: $scrub)
         }
         .help("Memory in use inside it, file cache included, out of what it was given")
     }
@@ -178,7 +175,7 @@ struct InstanceUsageView: View {
         let received = series(\.receiveRate)
         let sent = series(\.sendRate)
         let top = ResourceScale.niceCeiling(
-            max(received.map(\.value).max() ?? 0, sent.map(\.value).max() ?? 0), floor: Self.quietRate)
+            max(received.map(\.value).max() ?? 0, sent.map(\.value).max() ?? 0), floor: DashboardView.quietRate)
         let totals = history?.lastSample.flatMap { sample -> String? in
             guard let rx = sample.bytesReceived, let tx = sample.bytesSent else { return nil }
             return "\(ResourceFormat.disk(rx)) received, \(ResourceFormat.disk(tx)) sent since it started"
@@ -196,7 +193,7 @@ struct InstanceUsageView: View {
         let read = series(\.readRate)
         let written = series(\.writeRate)
         let top = ResourceScale.niceCeiling(
-            max(read.map(\.value).max() ?? 0, written.map(\.value).max() ?? 0), floor: Self.quietRate)
+            max(read.map(\.value).max() ?? 0, written.map(\.value).max() ?? 0), floor: DashboardView.quietRate)
         let totals = history?.lastSample.flatMap { sample -> String? in
             guard let r = sample.bytesRead, let w = sample.bytesWritten else { return nil }
             return "\(ResourceFormat.disk(r)) read, \(ResourceFormat.disk(w)) written since it started"
@@ -210,9 +207,6 @@ struct InstanceUsageView: View {
         .help("How fast it reads from and writes to its disk, on one scale")
     }
 
-    /// The top of a rate chart while traffic is lighter than this, as on the
-    /// dashboard.
-    private static let quietRate: Double = 64_000
 }
 
 // MARK: - Pieces
@@ -301,116 +295,9 @@ private struct PairedCharts: View {
             }
             .font(.callout)
             HistoryChart(
-                points: row.points, start: start, end: end, top: top, axis: ResourceFormat.rate,
+                points: row.points, start: start, end: end, top: top, format: .rate,
                 timeAxis: axis, height: 52, scrub: $scrub)
         }
-    }
-}
-
-/// A figure over time, on axes: a 2-point line over a faint wash, the time
-/// along the bottom, the scale on the right, hairline grid. The pointer's
-/// moment is marked with a hairline and a dot, here and on every chart that
-/// shares `scrub`.
-struct HistoryChart: View {
-    let points: [SparkPoint]
-    let start: Date
-    let end: Date
-    /// The top of the scale, unless a reading goes higher.
-    let top: Double
-    let axis: (Double) -> String
-    var timeAxis = true
-    var height: CGFloat = 132
-    @Binding var scrub: Date?
-
-    var body: some View {
-        let scale = max(top, points.map(\.value).max() ?? 0, 1e-9)
-        let marked = scrub.flatMap { time in
-            points.min { abs($0.time.timeIntervalSince(time)) < abs($1.time.timeIntervalSince(time)) }
-        }
-        Chart {
-            ForEach(points) { point in
-                AreaMark(x: .value("Time", point.time), y: .value("Value", point.value))
-                    .foregroundStyle(DashboardColor.series.opacity(0.1))
-                    .interpolationMethod(.monotone)
-                LineMark(x: .value("Time", point.time), y: .value("Value", point.value))
-                    .foregroundStyle(DashboardColor.series)
-                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-                    .interpolationMethod(.monotone)
-            }
-            if let marked {
-                RuleMark(x: .value("Time", marked.time))
-                    .foregroundStyle(Color.secondary.opacity(0.7))
-                    .lineStyle(StrokeStyle(lineWidth: 1))
-            }
-            if let dot = marked ?? points.last {
-                PointMark(x: .value("Time", dot.time), y: .value("Value", dot.value))
-                    .symbol { EndDot() }
-            }
-        }
-        .chartXScale(domain: start...end)
-        .chartYScale(domain: 0...scale)
-        .chartXAxis {
-            if timeAxis {
-                AxisMarks(values: [start, start.addingTimeInterval(end.timeIntervalSince(start) / 2), end]) { value in
-                    AxisGridLine(stroke: StrokeStyle(lineWidth: 1))
-                        .foregroundStyle(DashboardColor.grid)
-                    AxisValueLabel(anchor: anchor(for: value.index, of: value.count)) {
-                        if let date = value.as(Date.self) {
-                            Text(ResourceFormat.ago(end.timeIntervalSince(date)))
-                        }
-                    }
-                }
-            } else {
-                AxisMarks(values: [start, start.addingTimeInterval(end.timeIntervalSince(start) / 2), end]) { _ in
-                    AxisGridLine(stroke: StrokeStyle(lineWidth: 1))
-                        .foregroundStyle(DashboardColor.grid)
-                }
-            }
-        }
-        .chartYAxis {
-            // A short chart has room for its ends only.
-            AxisMarks(position: .trailing, values: height < 80 ? [0, scale] : [0, scale / 2, scale]) { value in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 1))
-                    .foregroundStyle(DashboardColor.grid)
-                // Clear of the end dot, which sits on the chart's right edge.
-                AxisValueLabel(horizontalSpacing: 9) {
-                    if let number = value.as(Double.self) {
-                        Text(ResourceFormat.axis(number, axis))
-                    }
-                }
-            }
-        }
-        .chartOverlay { proxy in
-            GeometryReader { geometry in
-                Rectangle()
-                    .fill(.clear)
-                    .contentShape(Rectangle())
-                    .onContinuousHover { phase in
-                        guard case .active(let location) = phase,
-                            let time: Date = proxy.value(
-                                atX: location.x - (proxy.plotFrame.map { geometry[$0].minX } ?? 0)),
-                            let nearest = points.min(by: {
-                                abs($0.time.timeIntervalSince(time)) < abs($1.time.timeIntervalSince(time))
-                            })
-                        else {
-                            scrub = nil
-                            return
-                        }
-                        scrub = nearest.time
-                    }
-            }
-        }
-        .frame(height: height)
-        // Every figure is in text above the chart.
-        .accessibilityHidden(true)
-    }
-
-    /// The first time label sits right of its tick and the last left of
-    /// it, so neither hangs off the chart.
-    private func anchor(for index: Int, of count: Int) -> UnitPoint {
-        if index == 0 { return .topLeading }
-        if index == count - 1 { return .topTrailing }
-        return .top
     }
 }
 

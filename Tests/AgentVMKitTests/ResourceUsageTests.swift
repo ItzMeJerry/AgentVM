@@ -28,6 +28,18 @@ struct ResourceUsageTests {
             bytesReceived: received, bytesSent: sent, bytesRead: read, bytesWritten: written, processes: 3)
     }
 
+    /// A point with only the figures a test is about; the rest unknown.
+    private func point(
+        coresInUse: Double? = nil, cpuShare: Double? = nil, memoryUsed: UInt64? = nil, memoryLimit: UInt64? = nil,
+        receiveRate: Double? = nil, sendRate: Double? = nil, readRate: Double? = nil, writeRate: Double? = nil,
+        processes: UInt64? = nil, allocatedCPUs: Int = 0
+    ) -> ResourcePoint {
+        ResourcePoint(
+            time: start, coresInUse: coresInUse, cpuShare: cpuShare, memoryUsed: memoryUsed, memoryLimit: memoryLimit,
+            receiveRate: receiveRate, sendRate: sendRate, readRate: readRate, writeRate: writeRate,
+            processes: processes, allocatedCPUs: allocatedCPUs)
+    }
+
     @Test("The first reading shows memory straight away, but no rates until there's a second")
     func firstReading() throws {
         var history = ResourceHistory()
@@ -135,28 +147,20 @@ struct ResourceUsageTests {
 
     @Test("Memory as a share of its limit, never more than all of it")
     func memoryShare() {
-        let half = ResourcePoint(
-            time: start, coresInUse: nil, cpuShare: nil, memoryUsed: 512, memoryLimit: 1_024, receiveRate: nil,
-            sendRate: nil, readRate: nil, writeRate: nil, processes: nil)
+        let half = point(memoryUsed: 512, memoryLimit: 1_024)
         #expect(half.memoryShare == 0.5)
-        let over = ResourcePoint(
-            time: start, coresInUse: nil, cpuShare: nil, memoryUsed: 2_000, memoryLimit: 1_000, receiveRate: nil,
-            sendRate: nil, readRate: nil, writeRate: nil, processes: nil)
+        let over = point(memoryUsed: 2_000, memoryLimit: 1_000)
         #expect(over.memoryShare == 1)
-        let unlimited = ResourcePoint(
-            time: start, coresInUse: nil, cpuShare: nil, memoryUsed: 2_000, memoryLimit: 0, receiveRate: nil,
-            sendRate: nil, readRate: nil, writeRate: nil, processes: nil)
+        let unlimited = point(memoryUsed: 2_000, memoryLimit: 0)
         #expect(unlimited.memoryShare == nil)
     }
 
     @Test("Totals add every instance up, counting what's unknown as nothing")
     func totals() {
-        let busy = ResourcePoint(
-            time: start, coresInUse: 1.5, cpuShare: 0.75, memoryUsed: 300, memoryLimit: 1_000, receiveRate: 10,
-            sendRate: 5, readRate: 0, writeRate: 2, processes: 4)
-        let fresh = ResourcePoint(
-            time: start, coresInUse: nil, cpuShare: nil, memoryUsed: 200, memoryLimit: 2_000, receiveRate: nil,
-            sendRate: nil, readRate: nil, writeRate: nil, processes: 1)
+        let busy = point(
+            coresInUse: 1.5, cpuShare: 0.75, memoryUsed: 300, memoryLimit: 1_000, receiveRate: 10, sendRate: 5,
+            readRate: 0, writeRate: 2, processes: 4)
+        let fresh = point(memoryUsed: 200, memoryLimit: 2_000, processes: 1)
         let totals = ResourceTotals.sum([busy, fresh], at: start)
         #expect(totals.coresInUse == 1.5)
         #expect(totals.memoryUsed == 500)
@@ -188,12 +192,8 @@ struct ResourceUsageTests {
 
     @Test("Totals that would overflow stop at the top instead of crashing")
     func totalsOverflow() {
-        let huge = ResourcePoint(
-            time: start, coresInUse: nil, cpuShare: nil, memoryUsed: .max - 1, memoryLimit: nil, receiveRate: nil,
-            sendRate: nil, readRate: nil, writeRate: nil, processes: .max)
-        let more = ResourcePoint(
-            time: start, coresInUse: nil, cpuShare: nil, memoryUsed: 10, memoryLimit: nil, receiveRate: nil,
-            sendRate: nil, readRate: nil, writeRate: nil, processes: 3)
+        let huge = point(memoryUsed: .max - 1, processes: .max)
+        let more = point(memoryUsed: 10, processes: 3)
         let totals = ResourceTotals.sum([huge, more], at: start)
         #expect(totals.memoryUsed == .max)
         #expect(totals.processes == .max)
@@ -201,12 +201,8 @@ struct ResourceUsageTests {
 
     @Test("The total CPU share counts only the CPUs of instances with a reading")
     func totalCPUShare() {
-        let busy = ResourcePoint(
-            time: start, coresInUse: 1, cpuShare: 0.5, memoryUsed: nil, memoryLimit: 1_000, receiveRate: nil,
-            sendRate: nil, readRate: nil, writeRate: nil, processes: 2, allocatedCPUs: 2)
-        let starting = ResourcePoint(
-            time: start, coresInUse: nil, cpuShare: nil, memoryUsed: nil, memoryLimit: 1_000, receiveRate: nil,
-            sendRate: nil, readRate: nil, writeRate: nil, processes: 1, allocatedCPUs: 6)
+        let busy = point(coresInUse: 1, cpuShare: 0.5, memoryLimit: 1_000, processes: 2, allocatedCPUs: 2)
+        let starting = point(memoryLimit: 1_000, processes: 1, allocatedCPUs: 6)
         let totals = ResourceTotals.sum([busy, starting], at: start)
         #expect(totals.allocatedCPUs == 2, "the instance still starting has no CPU reading yet")
         #expect(totals.cpuShare == 0.5)
@@ -224,12 +220,21 @@ struct ResourceUsageTests {
         #expect(history.latest?.allocatedCPUs == 0, "a nonsense count is none")
     }
 
+    @Test("A history keeps the latest reading's running totals")
+    func lastSample() {
+        var history = ResourceHistory()
+        #expect(history.lastSample == nil)
+        let sample = ResourceSample(time: Date(), bytesReceived: 12_000)
+        history.record(sample, allocatedCPUs: 1)
+        #expect(history.lastSample == sample)
+    }
+
     @Test("Storage adds images, containers and volumes, and what could be reclaimed")
     func storage() {
         let summary = StorageSummary(
-            images: .init(count: 3, active: 2, bytes: 1_000, reclaimable: 400),
-            containers: .init(count: 2, active: 1, bytes: 300, reclaimable: 100),
-            volumes: .init(count: 0, active: 0, bytes: 0, reclaimable: 0))
+            images: .init(count: 3, bytes: 1_000, reclaimable: 400),
+            containers: .init(count: 2, bytes: 300, reclaimable: 100),
+            volumes: .init(count: 0, bytes: 0, reclaimable: 0))
         #expect(summary.totalBytes == 1_300)
         #expect(summary.reclaimableBytes == 500)
     }
@@ -340,6 +345,19 @@ struct ResourceFormatTests {
         #expect(ResourceFormat.uptime(-3) == "0s")
     }
 
+    @Test("An axis reads 0 at zero, not 0 KB/s")
+    func axis() {
+        #expect(ResourceFormat.axis(0, ResourceFormat.rate) == "0")
+        #expect(ResourceFormat.axis(50_000, ResourceFormat.rate) == "50 KB/s")
+    }
+
+    @Test("One process is a process")
+    func processes() {
+        #expect(ResourceFormat.processes(1) == "1 process")
+        #expect(ResourceFormat.processes(4) == "4 processes")
+        #expect(ResourceFormat.processes(0) == "0 processes")
+    }
+
     @Test("A reading being looked back at says how long ago it was")
     func ago() {
         #expect(ResourceFormat.ago(0.4) == "now")
@@ -369,20 +387,6 @@ struct ResourceScaleTests {
         #expect(ResourceScale.niceCeiling(.nan, floor: 5) == 5)
     }
 
-    @Test("An axis reads 0 at zero, not 0 KB/s")
-    func axis() {
-        #expect(ResourceFormat.axis(0, ResourceFormat.rate) == "0")
-        #expect(ResourceFormat.axis(50_000, ResourceFormat.rate) == "50 KB/s")
-    }
-
-    @Test("A history keeps the latest reading's running totals")
-    func lastSample() {
-        var history = ResourceHistory()
-        #expect(history.lastSample == nil)
-        let sample = ResourceSample(time: Date(), bytesReceived: 12_000)
-        history.record(sample, allocatedCPUs: 1)
-        #expect(history.lastSample == sample)
-    }
 }
 
 @Suite("Sampling interval")

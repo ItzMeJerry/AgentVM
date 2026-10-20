@@ -13,13 +13,20 @@ import AgentVMKit
 import SwiftUI
 
 @MainActor
-final class LogTailer: ObservableObject {
-    @Published var text: String = ""
-    @Published var error: String?
+@Observable
+final class LogTailer {
+    /// Everything read so far.
+    private(set) var text: String = ""
+    /// Goes up each time `text` starts over — another log, or this one
+    /// rotated — so a view that only appends knows to start over too.
+    private(set) var generation = 0
+    private(set) var error: String?
 
-    private var handle: FileHandle?
-    private var follower: Task<Void, Never>?
-    private var offset: UInt64 = 0
+    @ObservationIgnored private var handle: FileHandle?
+    @ObservationIgnored private var follower: Task<Void, Never>?
+    @ObservationIgnored private var offset: UInt64 = 0
+    /// Holds a character a read cut in two until the rest of it is read.
+    @ObservationIgnored private var decoder = UTF8Stream()
 
     /// Tails the log by polling from a byte offset. The log is a regular file,
     /// where a readability handler tells you nothing useful — a file is always
@@ -51,15 +58,14 @@ final class LogTailer: ObservableObject {
             if end < offset {
                 // The log was rotated or truncated under us; start over.
                 offset = 0
-                text = ""
+                startOver()
             }
             guard end > offset else { return }
             try handle.seek(toOffset: offset)
             let data = handle.readData(ofLength: Int(end - offset))
             offset = end
-            if let chunk = String(data: data, encoding: .utf8) {
-                text += chunk
-            }
+            let chunk = decoder.decode(data)
+            if !chunk.isEmpty { text += chunk }
         } catch {
             self.error = error.agentVMDisplayMessage
         }
@@ -71,14 +77,20 @@ final class LogTailer: ObservableObject {
         try? handle?.close()
         handle = nil
         offset = 0
-        text = ""
+        startOver()
         error = nil
+    }
+
+    private func startOver() {
+        text = ""
+        decoder = UTF8Stream()
+        generation += 1
     }
 }
 
 struct LogsView: View {
-    @EnvironmentObject private var model: AppModel
-    @StateObject private var tailer = LogTailer()
+    @Environment(AppModel.self) private var model
+    @State private var tailer = LogTailer()
     @State private var showingBoot = false
     @State private var follow = true
     let instance: AgentVMInstance
@@ -88,7 +100,8 @@ struct LogsView: View {
             if let error = tailer.error {
                 ContentUnavailableView("No logs", systemImage: "doc.text", description: Text(error))
             } else {
-                LogTextView(text: tailer.text, follow: $follow)
+                LogTextView(
+                    tailer: tailer, length: tailer.text.utf8.count, generation: tailer.generation, follow: $follow)
                     .overlay {
                         if tailer.text.isEmpty { emptyLog }
                     }
@@ -177,9 +190,22 @@ struct LogsView: View {
 /// ⌘F, and it only ever appends — a long log isn't re-laid out on every tick.
 /// It follows the end while you're at the end, and leaves you alone while
 /// you're reading further up.
+///
+/// It takes the tailer rather than a copy of its text: a copy held here would
+/// make each append copy the whole log. What's new is found by its length in
+/// UTF-8, which a string knows without counting.
 private struct LogTextView: NSViewRepresentable {
-    let text: String
+    let tailer: LogTailer
+    /// What there is, and which run of the log: a change to either is
+    /// something to show.
+    let length: Int
+    let generation: Int
     @Binding var follow: Bool
+
+    private static let attributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular),
+        .foregroundColor: NSColor.textColor,
+    ]
 
     func makeCoordinator() -> Coordinator { Coordinator(follow: $follow) }
 
@@ -212,25 +238,30 @@ private struct LogTextView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView,
             let storage = textView.textStorage
         else { return }
-        let incoming = text as NSString
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular),
-            .foregroundColor: NSColor.textColor,
-        ]
-        context.coordinator.updating = true
-        if incoming.length < storage.length || (storage.length > 0 && incoming.length == 0) {
-            storage.setAttributedString(NSAttributedString(string: text, attributes: attributes))
-        } else if incoming.length > storage.length {
-            let tail = incoming.substring(from: storage.length)
-            storage.append(NSAttributedString(string: tail, attributes: attributes))
+        let coordinator = context.coordinator
+        let text = tailer.text.utf8
+        coordinator.updating = true
+        if coordinator.generation != generation || text.count < coordinator.shown {
+            storage.setAttributedString(NSAttributedString(string: tailer.text, attributes: Self.attributes))
+            coordinator.generation = generation
+        } else if text.count > coordinator.shown {
+            // By bytes, not by characters: a mark that combines with the
+            // last character shown arrives on its own.
+            let tail = String(decoding: text[text.index(text.startIndex, offsetBy: coordinator.shown)...], as: UTF8.self)
+            storage.append(NSAttributedString(string: tail, attributes: Self.attributes))
         }
+        coordinator.shown = text.count
         if follow { textView.scrollToEndOfDocument(nil) }
-        context.coordinator.updating = false
+        coordinator.updating = false
     }
 
     final class Coordinator: NSObject {
         var follow: Binding<Bool>
         var updating = false
+        /// How much of the log, in UTF-8 bytes, the text view has, and of
+        /// which run of it.
+        var shown = 0
+        var generation = 0
         private var observer: NSObjectProtocol?
 
         init(follow: Binding<Bool>) { self.follow = follow }

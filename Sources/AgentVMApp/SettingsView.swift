@@ -1,7 +1,8 @@
 //
 //  SettingsView.swift
-//  The config file and the env registry, edited in place. Both stay plain
-//  KEY=VALUE files, editable by hand just as well.
+//  The config file's defaults and the env registry, edited in place — both
+//  stay plain KEY=VALUE files, editable by hand just as well — and how
+//  sessions and the dashboard behave.
 //
 //  AgentVM — https://github.com/ItzMeJerry/AgentVM
 //  Copyright 2026 Jerry Lan
@@ -29,7 +30,7 @@ struct SettingsView: View {
 }
 
 private struct DefaultsSettings: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @State private var draft = AgentVMConfig()
     @State private var cpusText = ""
     @State private var memoryText = ""
@@ -107,9 +108,10 @@ private struct DefaultsSettings: View {
 /// How shell sessions look. Like the dashboard's interval, it takes effect as
 /// soon as it's chosen.
 private struct SessionSettings: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
 
     var body: some View {
+        @Bindable var model = model
         Form {
             Section {
                 Toggle(isOn: $model.glassSessions) {
@@ -139,12 +141,12 @@ private struct SessionSettings: View {
 /// How often the dashboard reads. Unlike the config file, it takes effect as
 /// soon as it's chosen.
 private struct DashboardSettings: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         Form {
             Section {
-                Picker("Read figures every", selection: $model.samplingInterval) {
+                Picker("Read every", selection: Bindable(model).samplingInterval) {
                     ForEach(SamplingInterval.choices, id: \.self) { interval in
                         Text(SamplingInterval.describe(interval)).tag(interval)
                     }
@@ -160,9 +162,9 @@ private struct DashboardSettings: View {
 }
 
 private struct RegistrySettings: View {
-    @EnvironmentObject private var model: AppModel
-    @State private var entries: [EnvEntry] = []
-    @State private var revealed: Set<String> = []
+    @Environment(AppModel.self) private var model
+    @State private var rows: [EnvRow] = []
+    @State private var revealed: Set<UUID> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -176,7 +178,7 @@ private struct RegistrySettings: View {
             .padding(.bottom, 10)
 
             List {
-                ForEach($entries) { $entry in
+                ForEach($rows) { $entry in
                     HStack(spacing: 8) {
                         TextField("KEY", text: $entry.key)
                             .textFieldStyle(.roundedBorder)
@@ -199,7 +201,7 @@ private struct RegistrySettings: View {
                         }
                         .buttonStyle(.borderless)
                         Button {
-                            entries.removeAll { $0.id == entry.id }
+                            rows.removeAll { $0.id == entry.id }
                         } label: {
                             Image(systemName: "minus.circle")
                         }
@@ -210,7 +212,7 @@ private struct RegistrySettings: View {
 
             HStack {
                 Button {
-                    entries.append(EnvEntry(key: "", value: ""))
+                    rows.append(EnvRow())
                 } label: {
                     Label("Add", systemImage: "plus")
                 }
@@ -223,13 +225,35 @@ private struct RegistrySettings: View {
                     .foregroundStyle(.tertiary)
 
                 Button("Save") {
-                    model.saveRegistry(entries.filter { !$0.key.trimmingCharacters(in: .whitespaces).isEmpty })
+                    model.saveRegistry(EnvRow.entries(rows))
                 }
                 .buttonStyle(.glassProminent)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
         }
-        .onAppear { entries = model.registry.load() }
+        .onAppear { rows = model.registry.load().map(EnvRow.init) }
+    }
+}
+
+/// A variable being edited. A row has an identity of its own rather than
+/// its name's: it keeps its place, and its field the focus, while the name in
+/// it is typed, and two new rows are two rows.
+struct EnvRow: Identifiable {
+    let id = UUID()
+    var key = ""
+    var value = ""
+
+    init() {}
+
+    init(_ entry: EnvEntry) {
+        key = entry.key
+        value = entry.value
+    }
+
+    /// The rows given a name, as entries; the rest were left blank.
+    static func entries(_ rows: [EnvRow]) -> [EnvEntry] {
+        rows.filter { !$0.key.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map { EnvEntry(key: $0.key, value: $0.value) }
     }
 }

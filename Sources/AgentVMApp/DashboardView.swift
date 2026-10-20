@@ -19,8 +19,8 @@ import Charts
 import SwiftUI
 
 struct DashboardView: View {
-    @EnvironmentObject private var model: AppModel
-    @ObservedObject var monitor: ResourceMonitor
+    @Environment(AppModel.self) private var model
+    let monitor: ResourceMonitor
     @Binding var showingNewInstance: Bool
 
     private var serviceRunning: Bool { model.daemon?.running == true }
@@ -86,7 +86,7 @@ struct DashboardView: View {
                 ?? nothingRunning,
             points: totals.compactMap { total in total.cpuShare.map { SparkPoint(time: total.time, value: $0) } },
             upperBound: 1,
-            format: ResourceFormat.percent
+            format: .percent
         )
         .help("How busy the running instances are, as a share of the CPUs they were given")
     }
@@ -100,7 +100,7 @@ struct DashboardView: View {
                 ? nothingRunning : "Across \(running.count) running \(running.count == 1 ? "instance" : "instances")",
             points: totals.map { SparkPoint(time: $0.time, value: Double($0.memoryUsed)) },
             upperBound: Double(allocatedMemory),
-            format: { ResourceFormat.memory(bytes($0)) }
+            format: .memory
         )
         .help("Memory in use inside the running instances, file cache included, out of what they were given")
     }
@@ -113,7 +113,7 @@ struct DashboardView: View {
                 ?? nothingRunning,
             points: totals.map { SparkPoint(time: $0.time, value: $0.receiveRate + $0.sendRate) },
             upperBound: Self.quietRate,
-            format: ResourceFormat.rate
+            format: .rate
         )
         .help("Traffic into and out of the running instances, received ↓ and sent ↑")
     }
@@ -126,14 +126,14 @@ struct DashboardView: View {
                 ?? nothingRunning,
             points: totals.map { SparkPoint(time: $0.time, value: $0.readRate + $0.writeRate) },
             upperBound: Self.quietRate,
-            format: ResourceFormat.rate
+            format: .rate
         )
         .help("How fast the running instances read from and write to their disks")
     }
 
     /// The top of a rate chart while traffic is lighter than this, so a few
     /// bytes of chatter draw as the flat line they are rather than a mountain.
-    private static let quietRate: Double = 64_000
+    static let quietRate: Double = 64_000
 
     // MARK: - This Mac
 
@@ -144,7 +144,7 @@ struct DashboardView: View {
             detail: "\(HostResources.processorCount) cores",
             points: monitor.hostCPU.map { SparkPoint(time: $0.time, value: $0.share) },
             upperBound: 1,
-            format: ResourceFormat.percent
+            format: .percent
         )
         .help("How busy this Mac is, instances included")
     }
@@ -348,13 +348,13 @@ extension DashboardSection where Accessory == EmptyView {
 /// dashboard reads each instance and this Mac. The same setting as in
 /// Settings > Dashboard.
 struct IntervalPicker: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 4) {
             Text("Read every")
                 .foregroundStyle(.secondary)
-            Picker("Read every", selection: $model.samplingInterval) {
+            Picker("Read every", selection: Bindable(model).samplingInterval) {
                 ForEach(SamplingInterval.choices, id: \.self) { interval in
                     Text(SamplingInterval.describe(interval)).tag(interval)
                 }
@@ -481,11 +481,11 @@ private struct SparkTile: View {
     let detail: String
     let points: [SparkPoint]
     let upperBound: Double
-    let format: (Double) -> String
-    @State private var scrub: SparkPoint?
+    let format: ChartFormat
+    @State private var scrub: Date?
 
     var body: some View {
-        let shown = scrub.flatMap { scrubbed in points.first { $0.time == scrubbed.time } }
+        let shown = scrub.flatMap { points.nearest(to: $0) }
         StatTile(
             label: label,
             value: shown.map { format($0.value) } ?? value,
@@ -500,8 +500,7 @@ private struct SparkTile: View {
                     scrub = nil
                     return
                 }
-                let time = last.time.addingTimeInterval(-118 * (1 - fraction))
-                scrub = points.min { abs($0.time.timeIntervalSince(time)) < abs($1.time.timeIntervalSince(time)) }
+                scrub = points.nearest(to: last.time.addingTimeInterval(-Sparkline.window * (1 - fraction)))?.time
             }
         #endif
     }
@@ -541,104 +540,6 @@ private struct LinesTrend: View {
 }
 
 // MARK: - Marks
-
-struct SparkPoint: Identifiable, Equatable {
-    let time: Date
-    let value: Double
-    var id: Date { time }
-}
-
-/// The last two minutes of one figure: a 2-point line over a faint wash, an
-/// end dot ringed in the card's colour, and — while the pointer is over it —
-/// a hairline at the reading nearest the pointer.
-struct Sparkline: View {
-    let points: [SparkPoint]
-    /// The top of the scale, unless a reading goes higher.
-    let upperBound: Double
-    @Binding var scrub: SparkPoint?
-    /// The span the chart always covers, so a new line grows in from the
-    /// right instead of stretching across.
-    var window: TimeInterval = 118
-
-    var body: some View {
-        if let last = points.last {
-            // Only what fits: the oldest reading can sit a moment before the
-            // window, and would be drawn past the chart's left edge.
-            let start = last.time.addingTimeInterval(-window)
-            chart(points.filter { $0.time >= start }, from: start, to: last.time)
-        } else {
-            // Nothing to draw yet: a baseline, so the tile doesn't look broken.
-            Rectangle()
-                .fill(DashboardColor.border)
-                .frame(height: 1)
-                .frame(maxHeight: .infinity, alignment: .bottom)
-                .accessibilityHidden(true)
-        }
-    }
-
-    private func chart(_ points: [SparkPoint], from start: Date, to end: Date) -> some View {
-        let top = max(upperBound, points.map(\.value).max() ?? 0, 1e-9)
-        let marked = scrub.flatMap { scrubbed in points.first { $0.time == scrubbed.time } }
-        return Chart {
-            ForEach(points) { point in
-                AreaMark(x: .value("Time", point.time), y: .value("Value", point.value))
-                    .foregroundStyle(DashboardColor.series.opacity(0.1))
-                    .interpolationMethod(.monotone)
-                LineMark(x: .value("Time", point.time), y: .value("Value", point.value))
-                    .foregroundStyle(DashboardColor.series)
-                    .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-                    .interpolationMethod(.monotone)
-            }
-            if let marked {
-                RuleMark(x: .value("Time", marked.time))
-                    .foregroundStyle(Color.secondary.opacity(0.7))
-                    .lineStyle(StrokeStyle(lineWidth: 1))
-            }
-            if let dot = marked ?? points.last {
-                PointMark(x: .value("Time", dot.time), y: .value("Value", dot.value))
-                    .symbol { EndDot() }
-            }
-        }
-        .chartXScale(domain: start...end)
-        .chartYScale(domain: 0...top)
-        .chartXAxis(.hidden)
-        .chartYAxis(.hidden)
-        .chartLegend(.hidden)
-        .chartOverlay { proxy in
-            GeometryReader { geometry in
-                Rectangle()
-                    .fill(.clear)
-                    .contentShape(Rectangle())
-                    .onContinuousHover { phase in
-                        guard case .active(let location) = phase,
-                            let time: Date = proxy.value(
-                                atX: location.x - (proxy.plotFrame.map { geometry[$0].minX } ?? 0))
-                        else {
-                            scrub = nil
-                            return
-                        }
-                        scrub = points.min {
-                            abs($0.time.timeIntervalSince(time)) < abs($1.time.timeIntervalSince(time))
-                        }
-                    }
-            }
-        }
-        // The figure is in text beside the chart; the line adds its history.
-        .accessibilityHidden(true)
-    }
-}
-
-/// An 8-point dot with a 2-point ring of the card's colour around it, so it
-/// stays legible where it sits on the line.
-struct EndDot: View {
-    var body: some View {
-        Circle()
-            .fill(DashboardColor.series)
-            .padding(2)
-            .background(Circle().fill(DashboardColor.card))
-            .frame(width: 12, height: 12)
-    }
-}
 
 /// A share of a whole. The fill carries the severity; the empty part is a
 /// lighter step of the same colour.
@@ -706,8 +607,8 @@ private struct Columns<Name: View, CPU: View, Memory: View, Network: View, Disk:
 }
 
 private struct InstanceTable: View {
-    @EnvironmentObject private var model: AppModel
-    @ObservedObject var monitor: ResourceMonitor
+    @Environment(AppModel.self) private var model
+    let monitor: ResourceMonitor
     @Binding var showingNewInstance: Bool
 
     var body: some View {
@@ -760,7 +661,7 @@ private struct InstanceTable: View {
 }
 
 private struct InstanceUsageRow: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     let instance: AgentVMInstance
     let history: ResourceHistory?
     let disk: InstanceDisk?
@@ -829,6 +730,7 @@ private struct InstanceUsageRow: View {
                         LockBadge()
                     }
                 }
+                .animation(LockBadge.animation, value: model.isLocked(instance))
                 // The process count goes first when the column is narrow.
                 ViewThatFits(in: .horizontal) {
                     Text(statusLine(withProcesses: true))
@@ -846,7 +748,7 @@ private struct InstanceUsageRow: View {
         guard instance.isRunning else { return instance.stateLabel.capitalized }
         var parts = [instance.startedAt.map { "Up \(ResourceFormat.uptime(Date().timeIntervalSince($0)))" } ?? "Running"]
         if withProcesses, let processes = point?.processes {
-            parts.append(processes == 1 ? "1 process" : "\(processes) processes")
+            parts.append(ResourceFormat.processes(processes))
         }
         return parts.joined(separator: " · ")
     }

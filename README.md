@@ -33,16 +33,10 @@ bash Scripts/build-app.sh           # builds .build/AgentVM.app
 open .build/AgentVM.app
 ```
 
-The first build resolves and compiles the `apple/container` package graph, which is large;
-budget 15–30 minutes, ~4 GB of disk and a working network. After that, builds are
-incremental (~30 s).
-
-Xcode has to be installed, not just the Command Line Tools: SwiftUI's property wrappers are
-macros now, and the plugin that expands them ships inside Xcode. `Scripts/build-app.sh`
-finds it and passes it to the compiler — no `xcode-select`, no `sudo`. The terminal library
-also compiles a Metal shader, which needs Xcode's optional Metal toolchain; install it once
-with `xcodebuild -downloadComponent MetalToolchain` (BUILDING.md has the exact commands).
-`Scripts/doctor.sh` checks for all of this up front and says how to fix whatever is missing.
+The first build compiles the large `apple/container` package graph: budget 15–30 minutes,
+~4 GB of disk and a working network. After that, builds take about 30 seconds. It needs
+Xcode installed, not just the Command Line Tools, and Xcode's optional Metal toolchain;
+`Scripts/doctor.sh` checks for both and says how to fix whatever is missing.
 
 **[BUILDING.md](BUILDING.md)** has the full story: prerequisites, what each script does,
 why the three dependencies are pinned exactly, and what to do when a build goes wrong.
@@ -56,7 +50,7 @@ why the three dependencies are pinned exactly, and what to do when a build goes 
 | View > Sessions as Glass | sessions as panes of Liquid Glass over the blurred desktop (the default), or solid terminals |
 | Two-finger double tap | toggle between normal and large text |
 | Three-finger swipe, or ⇧⌘] ⇧⌘[ | next / previous session (the swipe needs "Swipe between pages" set to three fingers) |
-| ⌘T, ⌘1…⌘9 | new session, jump to a session |
+| ⌘T, ⌘1…⌘8, ⌘9 | new session, jump to a session, jump to the last one |
 | ⇧⌘D | the dashboard |
 | Click an instance on the dashboard | its own page of charts; swipe right with two fingers (or ⌘[) to go back, the page following your fingers |
 | Point at a line on the dashboard | the figure as it was then, and how long ago; on an instance's page, on every chart at once |
@@ -90,9 +84,8 @@ The app links `apple/container`'s own client libraries and calls them directly:
 renderer: its CoreGraphics one can make the app quit on macOS 27 the first time a terminal
 draws text, a Core Animation bug (Settings > Sessions switches back). The app ships its own
 copy of the renderer's shaders, which blend dark text the way macOS does, so light-mode
-text looks like any other Mac app's. The package pins
-`container` **1.3.0**: the XPC routes are versioned with the release, so the client and the
-daemon you have installed must agree. Upgrade the daemon, bump the pin.
+text looks like any other Mac app's. The package pins `container` **1.3.0**, the version of
+the daemon it talks to: upgrade the daemon, bump the pin ([why](BUILDING.md#version-pins)).
 
 ## Instances and tasks
 
@@ -254,26 +247,12 @@ NAME_PREFIX=agentvm-      # the app only touches names with this prefix
   don't know about AgentVM's locks. `container prune` removes every stopped container,
   locked or not, though it never touches a running one.
 
-## Layout
+## Source
 
-```
-Package.swift              container 1.3.0, containerization 0.41.0, SwiftTerm 1.20.0
-Sources/AgentVMKit/            the engine — config, env registry, and every daemon call
-Sources/AgentVMLayout/         split panes as plain values: snapping, templates, dividers
-Sources/AgentVMApp/            SwiftUI app, terminal sessions
-Tests/AgentVMKitTests/         the suite; no daemon, no VM, no network
-Tests/AgentVMLayoutTests/      every split-pane rule, plus thousands of random operations
-Scripts/                   doctor, build, test, clean
-BUILDING.md                building from source, and what to do when it fails
-CONTRIBUTING.md            the one rule, the layout, and how to test a change
-LICENSE, NOTICE            Apache 2.0, and the credit anything built on AgentVM carries
-```
-
-`Scripts/test.sh` runs the tests. They cover the logic that decides what reaches the
-system — port specs, the config file, the env registry, mount refusals, name rules, the
-lock list and what Prune keeps —
-against temporary directories only: nothing in `~/.config/agentvm` is read or written, and no
-container is created.
+Three modules: `AgentVMKit`, the engine, with every call to the daemon; `AgentVMLayout`, the
+split-pane rules as plain values; and `AgentVMApp`, the SwiftUI app. `Scripts/test.sh` runs
+their tests, which need no daemon, no VM and no network. [CONTRIBUTING.md](CONTRIBUTING.md)
+maps the source, says what the tests cover, and gives the one rule the code keeps.
 
 ## License
 

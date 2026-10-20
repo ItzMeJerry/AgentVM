@@ -11,10 +11,9 @@
 import AppKit
 import AgentVMKit
 import SwiftUI
-import UniformTypeIdentifiers
 
 struct NewInstanceSheet: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
 
     @State private var spec = RunSpec()
@@ -23,6 +22,9 @@ struct NewInstanceSheet: View {
     @State private var memoryText = ""
     @State private var creating = false
     @State private var dropTargeted = false
+    @State private var envRows: [EnvRow] = []
+    /// Read once: the body runs again on every keystroke.
+    @State private var registryCount = 0
 
     var body: some View {
         VStack(spacing: 0) {
@@ -59,7 +61,10 @@ struct NewInstanceSheet: View {
             .scrollEdgeEffectStyle(.hard, for: .bottom)
         }
         .frame(width: 560, height: 620)
-        .onAppear { spec = RunSpec(config: model.config) }
+        .onAppear {
+            spec = RunSpec(config: model.config)
+            registryCount = model.registry.load().count
+        }
     }
 
     private var footer: some View {
@@ -206,9 +211,9 @@ struct NewInstanceSheet: View {
         Section {
             Toggle(isOn: $spec.useRegistry) {
                 Text("Shared env registry")
-                Text("\(model.registry.load().count) variables")
+                Text("\(registryCount) variables")
             }
-            ForEach($spec.env) { $entry in
+            ForEach($envRows) { $entry in
                 HStack(spacing: 6) {
                     TextField("Name", text: $entry.key, prompt: Text("KEY"))
                         .labelsHidden()
@@ -218,7 +223,7 @@ struct NewInstanceSheet: View {
                     TextField("Value", text: $entry.value, prompt: Text("value"))
                         .labelsHidden()
                     Button {
-                        spec.env.removeAll { $0.id == entry.id }
+                        envRows.removeAll { $0.id == entry.id }
                     } label: {
                         Image(systemName: "minus.circle")
                     }
@@ -227,7 +232,7 @@ struct NewInstanceSheet: View {
                 }
             }
             Button {
-                spec.env.append(EnvEntry(key: "", value: ""))
+                envRows.append(EnvRow())
             } label: {
                 Label("Add Variable", systemImage: "plus")
             }
@@ -275,7 +280,7 @@ struct NewInstanceSheet: View {
         let memory = memoryText.trimmingCharacters(in: .whitespaces)
         spec.memory = memory.isEmpty ? nil : memory
         spec.command = (try? ShellWords.split(commandText)) ?? []
-        spec.env = spec.env.filter { !$0.key.trimmingCharacters(in: .whitespaces).isEmpty }
+        spec.env = EnvRow.entries(envRows)
         spec.mounts = spec.mounts.filter { !$0.hostPath.isEmpty || !$0.guestPath.isEmpty }
 
         creating = true

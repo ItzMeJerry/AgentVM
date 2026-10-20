@@ -6,7 +6,7 @@ and the version pins.
 ```sh
 bash Scripts/doctor.sh     # is this machine able to build?
 bash Scripts/build-app.sh  # → .build/AgentVM.app
-bash Scripts/test.sh       # the AgentVMKit suite
+bash Scripts/test.sh       # the unit tests
 ```
 
 ## The one rule
@@ -31,14 +31,17 @@ shell scripts do.
 
 ```
 Package.swift              container 1.3.0, containerization 0.41.0, SwiftTerm 1.20.0
-Sources/AgentVMKit/            the engine — config, env registry, every daemon call.
+Sources/AgentVMKit/        the engine — config, env registry, every daemon call.
                            No UI dependency; it builds and tests on its own.
 Sources/AgentVMLayout/     split panes — snapping, templates, dividers — as plain
                            values, so every rule is a unit test away.
-Sources/AgentVMApp/            SwiftUI app, terminal sessions; Shaders/ is SwiftTerm's
+Sources/AgentVMApp/        SwiftUI app, terminal sessions; Shaders/ is SwiftTerm's
                            Metal shaders with dark text blended as macOS does it
-Tests/AgentVMKitTests/         the suite Scripts/test.sh runs
+Tests/AgentVMKitTests/     the engine's tests, and the opt-in integration suite
+Tests/AgentVMLayoutTests/  every split-pane rule, plus thousands of random operations
 Scripts/                   doctor, build, test, clean
+BUILDING.md                building from source, and what to do when it fails
+LICENSE, NOTICE            Apache 2.0, and the credit anything built on AgentVM carries
 ```
 
 `AgentVMKit` and `AgentVMLayout` must not import SwiftUI or AppKit. That
@@ -47,11 +50,21 @@ window, and it is worth keeping.
 
 ## Tests
 
-Anything that decides what reaches the system belongs under test: port specs,
-config parsing, the env registry, mount refusals, name rules, how a typed command
-splits into arguments, the lock list and what Prune keeps. Those tests run
-against temporary directories — no daemon, no VM, no network, and nothing in
-`~/.config/agentvm` read or written.
+Anything that decides what reaches the system belongs under test. `Scripts/test.sh`
+runs both test targets, and between them they cover:
+
+- the config file and its migration from sbx, the env registry, and the lock list
+  and what Prune keeps;
+- port specs, mount refusals and name rules;
+- how a typed command splits into arguments, and what a main process runs;
+- a session's output reaching the terminal whole, in order and held to the
+  terminal's pace, and a log read in pieces losing no character;
+- the dashboard's arithmetic and wording, and reading how full a disk is from
+  its ext4 image;
+- every split-pane rule, plus a randomized run of thousands of operations.
+
+They need no daemon, no VM and no network, and nothing in `~/.config/agentvm`
+is read or written: each test works in files of its own.
 
 Two habits worth keeping:
 
@@ -70,8 +83,11 @@ Code that talks to the daemon has a suite of its own, skipped by default:
 AGENTVM_INTEGRATION=1 bash Scripts/test.sh --filter Integration
 ```
 
-It boots real VMs, so it is slow and needs `container system start`. Everything
-it creates is named under the `agentvmit-` prefix, never `agentvm-`, and is deleted
+It pulls an image and boots real VMs: it runs commands in them, edits their
+ports and main process, locks and prunes them, and deletes them. So it is slow,
+and needs `container system start` and a network for the image pull.
+Everything it creates is named under the `agentvmit-` prefix, never `agentvm-`,
+so it cannot see or remove an instance you actually use, and it is deleted
 again even when a test fails. Run it before a pull request that touches
 `AgentVMEngine`, and say in the pull request which daemon version you ran it
 against.

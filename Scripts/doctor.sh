@@ -76,12 +76,13 @@ else
     fail "Architecture" "$ARCH — apple/container needs Apple Silicon"
 fi
 
-# A clean build writes roughly 4 GB into .build.
+# A clean build writes roughly 4 GB into .build; once that's there, a build
+# only recompiles, which takes little more.
 AVAILABLE_KB="$(df -k "$ROOT" | awk 'NR==2 {print $4}')"
 AVAILABLE_GB=$((AVAILABLE_KB / 1024 / 1024))
 if [ "$AVAILABLE_GB" -ge 8 ]; then
     ok "Free disk space" "${AVAILABLE_GB} GB"
-elif [ "$AVAILABLE_GB" -ge 5 ]; then
+elif [ "$AVAILABLE_GB" -ge 5 ] || [ -d "$ROOT/.build/checkouts" ]; then
     warn "Free disk space" "${AVAILABLE_GB} GB — enough, but not much to spare" \
         "A clean build writes about 4 GB into .build/."
 else
@@ -123,11 +124,7 @@ fi
 # shellcheck source=Scripts/toolchain.sh
 source "$ROOT/Scripts/toolchain.sh"
 if swift_plugin_flags 2>/dev/null; then
-    if [ "${#SWIFT_PLUGIN_FLAGS[@]}" -eq 0 ]; then
-        ok "SwiftUI macro plugin" "in the selected toolchain"
-    else
-        ok "SwiftUI macro plugin" "${SWIFT_PLUGIN_FLAGS[3]}"
-    fi
+    ok "SwiftUI macro plugin" "${SWIFT_PLUGIN_FLAGS[3]}"
 else
     fail "SwiftUI macro plugin" "libSwiftUIMacros.dylib not found" \
         "SwiftUI's @State and friends are macros, and the plugin that expands" \
@@ -152,7 +149,7 @@ if command -v container >/dev/null 2>&1; then
     CONTAINER_VERSION="$(container --version 2>/dev/null | head -1)"
     ok "container" "${CONTAINER_VERSION:-installed}"
     case "$CONTAINER_VERSION" in
-        *1.3*) ;;
+        *" 1.3."*) ;;
         "") ;;
         *) warn "container version" "$CONTAINER_VERSION" \
             "Package.swift pins the client libraries to container 1.3.0. The XPC" \
@@ -192,5 +189,5 @@ else
     printf '%sReady to build.%s\n' "$GREEN" "$OFF"
 fi
 printf '%s  bash Scripts/build-app.sh    builds .build/AgentVM.app%s\n' "$DIM" "$OFF"
-printf '%s  bash Scripts/test.sh         runs the AgentVMKit tests%s\n' "$DIM" "$OFF"
+printf '%s  bash Scripts/test.sh         runs the unit tests%s\n' "$DIM" "$OFF"
 exit 0

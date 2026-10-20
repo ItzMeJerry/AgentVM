@@ -11,11 +11,13 @@
 //    config.json                 what the runtime reads; written on first start
 //    runtime-configuration.json  the creation-time copy, the fallback when
 //                                config.json is missing or doesn't decode
+//    options.json                how it was created: whether it's one-shot.
+//                                Read only, and backed up with the others
 //
-//  Both are written with the daemon's own types and encoder, and decoded again
-//  before the change counts: at boot the daemon *deletes* a container whose
-//  configuration fails to decode. The originals are backed up first and put
-//  back if anything fails.
+//  The two configurations are written with the daemon's own types and encoder,
+//  and decoded again before the change counts: at boot the daemon *deletes* a
+//  container whose configuration fails to decode. The originals are backed up
+//  first and put back if anything fails.
 //
 //  The daemon keeps its own in-memory copy of every configuration from when it
 //  booted, so `get` and `list` go on reporting the old ports and the old main
@@ -37,8 +39,7 @@ extension AgentVMEngine {
     /// Replaces an instance's published ports. The instance must be stopped:
     /// the change applies when it next starts.
     public func setPorts(_ mappings: [PortMapping], on instance: AgentVMInstance) async throws {
-        try PortMapping.validate(mappings)
-        let ports = try mappings.map { try $0.publishPort() }
+        let ports = try PortMapping.validate(mappings)
         try await rewrite(instance, what: "the ports") { configuration in
             configuration.publishedPorts = ports
         } matches: { configuration in
@@ -55,22 +56,25 @@ extension AgentVMEngine {
         try await rewrite(instance, what: "the main process") { configuration in
             configuration.initProcess.executable = process.executable
             configuration.initProcess.arguments = process.arguments
-            configuration.labels["agentvm.mode"] = process.mode.rawValue
+            configuration.labels[AgentVMInstance.modeLabel] = process.mode.rawValue
         } matches: { configuration in
             configuration.initProcess.executable == process.executable
                 && configuration.initProcess.arguments == process.arguments
-                && configuration.labels["agentvm.mode"] == process.mode.rawValue
+                && configuration.labels[AgentVMInstance.modeLabel] == process.mode.rawValue
         }
     }
 
-    /// What the bundle knows and the daemon's copy doesn't: the ports and
-    /// main process that apply on the next start, and whether the container
-    /// is one-shot. Where the bundle can't be read, the daemon's copy stands.
-    nonisolated func readingBundle(_ instance: AgentVMInstance, in containersRoot: URL?) -> AgentVMInstance {
-        guard let containersRoot else { return instance }
-        let files = BundleFiles(directory: containersRoot.appendingPathComponent(instance.fullName))
-        let options: ContainerCreateOptions? = try? files.decode(files.options)
-        return instance.applying(bundle: try? files.configuration()).withOneShot(options?.autoRemove)
+    /// An instance as it will next start: the daemon's snapshot, with what
+    /// its bundle knows and the daemon's copy doesn't — the ports and main
+    /// process that apply on the next start, and whether it's one-shot.
+    /// Where the bundle can't be read, the daemon's copy stands.
+    nonisolated func instance(
+        from snapshot: ContainerSnapshot, config: AgentVMConfig, in containersRoot: URL?
+    ) -> AgentVMInstance {
+        guard let containersRoot else { return AgentVMInstance(snapshot: snapshot, config: config) }
+        let files = BundleFiles(directory: containersRoot.appendingPathComponent(snapshot.id))
+        return AgentVMInstance(
+            snapshot: snapshot, config: config, bundle: try? files.configuration(), oneShot: files.isOneShot)
     }
 
     /// Changes a stopped instance's configuration in both bundle files, reads
@@ -86,7 +90,7 @@ extension AgentVMEngine {
         let files = BundleFiles(directory: bundle)
 
         try await ensureStopped(instance.fullName, files: files)
-        if let options: ContainerCreateOptions = try? files.decode(files.options), options.autoRemove {
+        if files.isOneShot {
             throw AgentVMError(
                 "\(instance.shortName) is one-shot",
                 hint: "It is removed as it stops, so it never sits stopped for \(what) to change.")
@@ -162,9 +166,7 @@ extension AgentVMEngine {
     // MARK: - Locations
 
     private func bundleDirectory(for fullName: String) async throws -> URL {
-        guard let root = await containersRoot() else {
-            throw AgentVMError("cannot reach the container system service", hint: "Start it with `container system start`.")
-        }
+        guard let root = await containersRoot() else { throw AgentVMError.serviceUnreachable }
         let directory = root.appendingPathComponent(fullName, isDirectory: true)
         guard FileManager.default.fileExists(atPath: directory.path) else {
             throw AgentVMError("no container bundle for \(fullName) at \(directory.path)")
@@ -192,6 +194,13 @@ private struct BundleFiles {
 
     func decode<T: Decodable>(_ url: URL) throws -> T {
         try JSONDecoder().decode(T.self, from: Data(contentsOf: url))
+    }
+
+    /// Whether the daemon removes the container as it stops: from the
+    /// options it was created with.
+    var isOneShot: Bool {
+        let created: ContainerCreateOptions? = try? decode(options)
+        return created?.autoRemove ?? false
     }
 
     /// config.json when there is one, else the creation-time copy — the order

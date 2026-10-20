@@ -3,6 +3,10 @@
 //  The app's single source of truth: config, the instance list, sessions, and
 //  every operation the UI can start.
 //
+//  Observable: a view redraws when a property it read changes, and only then.
+//  Most polls find nothing new, and an equal value isn't a change, so they
+//  redraw nothing — not every view watching the model, as they used to.
+//
 //  AgentVM — https://github.com/ItzMeJerry/AgentVM
 //  Copyright 2026 Jerry Lan
 //  SPDX-License-Identifier: Apache-2.0
@@ -14,49 +18,55 @@ import AgentVMLayout
 import SwiftUI
 
 @MainActor
-final class AppModel: ObservableObject {
-    @Published var config: AgentVMConfig
-    @Published var instances: [AgentVMInstance] = []
-    @Published var selection: String? {
+@Observable
+final class AppModel {
+    var config: AgentVMConfig
+    var instances: [AgentVMInstance] = []
+    var selection: String? {
         // Leaving the dashboard closes the instance page over it, so coming
         // back starts from the overview.
         didSet { if selection != Self.dashboardID, dashboardInstance != nil { dashboardInstance = nil } }
     }
     /// The instance whose charts are open over the dashboard.
-    @Published var dashboardInstance: String?
-    @Published var daemon: AgentVMEngine.DaemonStatus?
-    @Published var networkNames: Set<String> = []
+    var dashboardInstance: String?
+    var daemon: AgentVMEngine.DaemonStatus?
+    var networkNames: Set<String> = []
 
     /// A one-line description of whatever long operation is in flight.
-    @Published var busy: String?
-    @Published var alert: AppAlert?
-    @Published var showingPrune = false
+    var busy: String?
+    var alert: AppAlert?
+    var showingPrune = false
     /// The last polling failure, shown in the status bar rather than as an alert.
-    @Published var lastRefreshError: String?
-    @Published var sessions: [String: [TerminalSession]] = [:]
-    /// The session tab last chosen, per instance — where ⌘[ and ⌘] start from.
-    @Published var selectedSession: [String: UUID] = [:]
+    var lastRefreshError: String?
+    var sessions: [String: [TerminalSession]] = [:]
+    /// The session tab last chosen, per instance — where ⇧⌘[ and ⇧⌘] start from.
+    var selectedSession: [String: UUID] = [:]
     /// Which sessions are on screen and where, per instance. Present whenever
     /// the instance has sessions; one pane until you split it.
-    @Published var layouts: [String: PaneLayout] = [:]
+    var layouts: [String: PaneLayout] = [:]
     /// Whether pane dividers snap to standard sizes (the default) or move
     /// freely. Remembered across launches.
-    @Published var paneResizeMode: ResizeMode {
+    var paneResizeMode: ResizeMode {
         didSet { if Self.remembersPreferences { UserDefaults.standard.set(paneResizeMode.rawValue, forKey: Self.resizeModeKey) } }
     }
     private static let resizeModeKey = "paneResizeMode"
     /// How often the dashboard reads each instance and this Mac, in seconds.
     /// Remembered across launches.
-    @Published var samplingInterval: TimeInterval {
+    var samplingInterval: TimeInterval {
         didSet {
             if Self.remembersPreferences { UserDefaults.standard.set(samplingInterval, forKey: Self.samplingIntervalKey) }
             if samplingInterval != oldValue { resources.intervalChanged(self) }
         }
     }
     private static let samplingIntervalKey = "samplingInterval"
+    /// How far back an instance's charts reach. Remembered across launches.
+    var chartRange: ChartRange {
+        didSet { if Self.remembersPreferences { UserDefaults.standard.set(chartRange.rawValue, forKey: Self.chartRangeKey) } }
+    }
+    private static let chartRangeKey = "instanceChartRange"
     /// Shell sessions as panes of Liquid Glass over the desktop, or solid
     /// terminals. Remembered across launches.
-    @Published var glassSessions: Bool {
+    var glassSessions: Bool {
         didSet {
             if Self.remembersPreferences { UserDefaults.standard.set(glassSessions, forKey: Self.glassSessionsKey) }
             for session in sessions.values.joined() { session.terminalView.isGlass = glassSessions }
@@ -66,7 +76,7 @@ final class AppModel: ObservableObject {
     /// Terminals drawn by SwiftTerm's Metal renderer — the default — or by
     /// CoreGraphics, which on macOS 27 can make the app quit the first time
     /// it draws terminal text. Remembered across launches.
-    @Published var metalSessions: Bool {
+    var metalSessions: Bool {
         didSet {
             if Self.remembersPreferences { UserDefaults.standard.set(metalSessions, forKey: Self.metalSessionsKey) }
             for session in sessions.values.joined() { session.terminalView.usesMetal = metalSessions }
@@ -74,24 +84,24 @@ final class AppModel: ObservableObject {
     }
     private static let metalSessionsKey = "metalSessions"
     /// Instances whose baked-in environment predates the current registry.
-    @Published var staleEnvironment: Set<String> = []
+    var staleEnvironment: Set<String> = []
     /// Locked instances, by container name: Prune leaves them alone and Delete
     /// refuses them. Re-read on every refresh, so a hand edit to the file
     /// shows up too.
-    @Published var lockedNames: Set<String> = []
+    var lockedNames: Set<String> = []
     /// Why the lock list can't be read, while it can't. The engine refuses
     /// Prune and Delete until it can.
-    @Published var lockError: String?
+    var lockError: String?
     /// The instance a Delete is waiting on confirmation for, from wherever it
     /// was asked: the header, the sidebar's menu, or a swipe.
-    @Published var pendingDelete: AgentVMInstance?
+    var pendingDelete: AgentVMInstance?
     /// The instance whose Ports sheet is open.
-    @Published var editingPorts: AgentVMInstance?
+    var editingPorts: AgentVMInstance?
     /// The instance whose Main Process sheet is open.
-    @Published var editingMainProcess: AgentVMInstance?
+    var editingMainProcess: AgentVMInstance?
     /// One size for every terminal, so a pinch in one tab doesn't leave the
     /// others behind. Remembered across launches.
-    @Published var terminalFontSize: CGFloat {
+    var terminalFontSize: CGFloat {
         didSet {
             if Self.remembersPreferences { UserDefaults.standard.set(Double(terminalFontSize), forKey: Self.fontSizeKey) }
             for session in sessions.values.joined() { session.terminalView.applyFontSize(terminalFontSize) }
@@ -100,9 +110,9 @@ final class AppModel: ObservableObject {
     private static let fontSizeKey = "terminalFontSize"
 
     let engine = AgentVMEngine.shared
-    /// The dashboard's readings, taken only while it's on screen.
+    /// The dashboard's readings, taken while the window is open.
     let resources = ResourceMonitor()
-    private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
 
     /// The sidebar's Dashboard row, in the same selection as the instances.
     /// A container name can't start with `#`, so it never matches one.
@@ -154,6 +164,7 @@ final class AppModel: ObservableObject {
         terminalFontSize = stored > 0 ? CGFloat(stored) : AgentVMTerminalView.defaultFontSize
         paneResizeMode = ResizeMode(rawValue: defaults?.string(forKey: Self.resizeModeKey) ?? "") ?? .snap
         samplingInterval = SamplingInterval.validated(defaults?.double(forKey: Self.samplingIntervalKey) ?? 0)
+        chartRange = ChartRange(rawValue: defaults?.string(forKey: Self.chartRangeKey) ?? "") ?? .twoMinutes
         glassSessions = defaults?.object(forKey: Self.glassSessionsKey) as? Bool ?? true
         metalSessions = defaults?.object(forKey: Self.metalSessionsKey) as? Bool ?? true
     }
@@ -167,7 +178,8 @@ final class AppModel: ObservableObject {
     // MARK: - Polling
 
     /// The daemon has no change feed, so the list is polled while the window is
-    /// up. Cheap: one XPC round trip.
+    /// up: a round trip to the service (two while a killswitch instance needs
+    /// its network checked on), and two small files per instance.
     func startPolling() {
         guard refreshTask == nil else { return }
         refreshTask = Task { [weak self] in
@@ -185,17 +197,23 @@ final class AppModel: ObservableObject {
 
     func refresh() async {
         readLocks()
-        let status = await engine.daemonStatus()
-        daemon = status
-        guard status.running else {
-            instances = []
-            return
+        // The service's version and folders don't change while it runs, so
+        // it's asked for them only while it's down, and when a list fails.
+        if daemon?.running != true {
+            daemon = await engine.daemonStatus()
+            guard daemon?.running == true else {
+                instances = []
+                return
+            }
         }
         do {
             let config = self.config
             instances = try await engine.list(config: config)
             lastRefreshError = nil
-            networkNames = (try? await engine.agentVMNetworkNames(config: config)) ?? []
+            // Only a killswitch instance has a network of its own to look for.
+            networkNames =
+                instances.contains { $0.networkName != nil }
+                ? (try? await engine.agentVMNetworkNames(config: config)) ?? [] : []
             recomputeStaleEnvironment()
             if let name = dashboardInstance, !instances.contains(where: { $0.fullName == name }) {
                 dashboardInstance = nil
@@ -205,6 +223,13 @@ final class AppModel: ObservableObject {
             }
             if selection == nil { selection = instances.first?.fullName }
         } catch {
+            // The service may have stopped.
+            let status = await engine.daemonStatus()
+            daemon = status
+            guard status.running else {
+                instances = []
+                return
+            }
             // Polling runs every couple of seconds: a transient XPC hiccup must
             // neither clear the list under the user nor raise a wall of alerts.
             // The next tick recovers; a real outage shows up as the status light.
@@ -281,27 +306,27 @@ final class AppModel: ObservableObject {
     /// straight after. Returns the failure for the sheet to show in place —
     /// an alert behind a sheet is easy to miss.
     func setPorts(_ ports: [PortMapping], on instance: AgentVMInstance, thenStart: Bool) async -> String? {
-        busy = "Changing the ports of \(instance.shortName)"
-        do {
+        await change(instance, "Changing the ports of \(instance.shortName)", thenStart: thenStart) { engine in
             try await engine.setPorts(ports, on: instance)
-        } catch {
-            busy = nil
-            return error.agentVMDisplayMessage
         }
-        busy = nil
-        await refresh()
-        if thenStart, let updated = instances.first(where: { $0.fullName == instance.fullName }) {
-            await start(updated)
-        }
-        return nil
     }
 
     /// Replaces a stopped instance's main process, optionally starting it
     /// straight after. Returns the failure for the sheet to show in place.
     func setMainProcess(_ process: MainProcess, on instance: AgentVMInstance, thenStart: Bool) async -> String? {
-        busy = "Changing what \(instance.shortName) runs"
-        do {
+        await change(instance, "Changing what \(instance.shortName) runs", thenStart: thenStart) { engine in
             try await engine.setMainProcess(process, on: instance)
+        }
+    }
+
+    /// A change to a stopped instance, then its next start if asked for.
+    private func change(
+        _ instance: AgentVMInstance, _ description: String, thenStart: Bool,
+        _ apply: (AgentVMEngine) async throws -> Void
+    ) async -> String? {
+        busy = description
+        do {
+            try await apply(engine)
         } catch {
             busy = nil
             return error.agentVMDisplayMessage
@@ -346,7 +371,10 @@ final class AppModel: ObservableObject {
         } catch {
             report(error, title: locked ? "Could not lock \(instance.shortName)" : "Could not unlock \(instance.shortName)")
         }
-        withAnimation(.snappy) { readLocks() }
+        // Not in withAnimation: the badges animate themselves. An animated
+        // update takes everything else that changes with it along, and the
+        // split view can leave a selection made then undrawn.
+        readLocks()
     }
 
     /// Where every Delete starts — the header, a menu, a swipe — so a locked
@@ -373,14 +401,11 @@ final class AppModel: ObservableObject {
 
     private func readLocks() {
         do {
-            let names = try InstanceLocks(url: config.lockFileURL).names()
-            // Read every couple of seconds: only a change is published.
-            if names != lockedNames { lockedNames = names }
-            if lockError != nil { lockError = nil }
+            lockedNames = try InstanceLocks(url: config.lockFileURL).names()
+            lockError = nil
         } catch {
             // The last list read stays on screen.
-            let message = error.agentVMDisplayMessage
-            if lockError != message { lockError = message }
+            lockError = error.agentVMDisplayMessage
         }
     }
 

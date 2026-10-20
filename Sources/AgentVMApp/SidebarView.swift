@@ -1,6 +1,7 @@
 //
 //  SidebarView.swift
-//  The instance list, plus the daemon's status at the bottom.
+//  The sidebar: the dashboard, the instance list, and the container
+//  service's status at the bottom.
 //
 //  AgentVM — https://github.com/ItzMeJerry/AgentVM
 //  Copyright 2026 Jerry Lan
@@ -12,11 +13,11 @@ import AgentVMKit
 import SwiftUI
 
 struct SidebarView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @Binding var showingNewInstance: Bool
 
     var body: some View {
-        List(selection: $model.selection) {
+        List(selection: Bindable(model).selection) {
             Label("Dashboard", systemImage: "gauge.with.dots.needle.33percent")
                 .tag(AppModel.dashboardID)
             Section("Instances") {
@@ -168,7 +169,7 @@ struct SidebarView: View {
 }
 
 struct InstanceRow: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     let instance: AgentVMInstance
 
     var body: some View {
@@ -183,6 +184,7 @@ struct InstanceRow: View {
                         LockBadge()
                     }
                 }
+                .animation(LockBadge.animation, value: model.isLocked(instance))
                 HStack(spacing: 5) {
                     Text(instance.imageDisplayName)
                         .lineLimit(1)
@@ -218,8 +220,10 @@ struct InstanceRow: View {
     }
 }
 
-/// Marks a locked instance, beside its name.
+/// Marks a locked instance, beside its name. Where it's shown, the row
+/// animates it in and out with `animation`.
 struct LockBadge: View {
+    static let animation = Animation.snappy
     var body: some View {
         Image(systemName: "lock.fill")
             .font(.caption2)
@@ -250,7 +254,7 @@ struct StateDot: View {
 }
 
 struct DaemonStatusBar: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
 
     private var running: Bool { model.daemon?.running == true }
 

@@ -1,6 +1,7 @@
 //
 //  ContentView.swift
-//  The window: instances on the left, the selected instance on the right.
+//  The window: the dashboard and the instances on the left, the one selected
+//  on the right, and the sheets and confirmations they share.
 //
 //  AgentVM — https://github.com/ItzMeJerry/AgentVM
 //  Copyright 2026 Jerry Lan
@@ -11,23 +12,16 @@ import AgentVMKit
 import SwiftUI
 
 struct ContentView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @Binding var showingNewInstance: Bool
 
     var body: some View {
+        @Bindable var model = model
         NavigationSplitView {
             SidebarView(showingNewInstance: $showingNewInstance)
                 .navigationSplitViewColumnWidth(min: 240, ideal: 270, max: 340)
         } detail: {
-            Group {
-                if model.showingDashboard {
-                    DashboardScreen(monitor: model.resources, showingNewInstance: $showingNewInstance)
-                } else if let instance = model.selectedInstance {
-                    InstanceDetailView(instance: instance)
-                } else {
-                    EmptyStateView(showingNewInstance: $showingNewInstance)
-                }
-            }
+            DetailColumn(showingNewInstance: $showingNewInstance)
         }
         .task {
             model.startPolling()
@@ -43,15 +37,15 @@ struct ContentView: View {
         #endif
         .sheet(isPresented: $showingNewInstance) {
             NewInstanceSheet()
-                .environmentObject(model)
+                .environment(model)
         }
         .sheet(item: $model.editingPorts) { instance in
             PortsSheet(instance: instance)
-                .environmentObject(model)
+                .environment(model)
         }
         .sheet(item: $model.editingMainProcess) { instance in
             MainProcessSheet(instance: instance)
-                .environmentObject(model)
+                .environment(model)
         }
         .confirmationDialog(
             model.prunePlan.kept.isEmpty ? "Remove every AgentVM instance?" : "Remove every unlocked AgentVM instance?",
@@ -86,13 +80,19 @@ struct ContentView: View {
             Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
         }
         .overlay(alignment: .bottom) {
-            if let busy = model.busy {
-                BusyBar(text: busy)
-                    .padding(.bottom, 12)
-                    .transition(.move(edge: .bottom).combined(with: .blurReplace))
+            // The bar animates itself and nothing else. Animating the whole
+            // window swept up whatever changed in the same update — the
+            // selection as New Instance finishes, say — and the split view
+            // could leave that undrawn.
+            ZStack {
+                if let busy = model.busy {
+                    BusyBar(text: busy)
+                        .padding(.bottom, 12)
+                        .transition(.move(edge: .bottom).combined(with: .blurReplace))
+                }
             }
+            .animation(.bouncy(duration: 0.35), value: model.busy)
         }
-        .animation(.bouncy(duration: 0.35), value: model.busy)
     }
 
     /// The rule, led by the locked instances it keeps, named.
@@ -116,6 +116,25 @@ struct ContentView: View {
     }
 }
 
+/// Beside the sidebar: the dashboard, the selected instance, or nothing
+/// selected yet. A view of its own, so it reads the selection in its own body.
+/// Read in the split view's detail closure, a change that came right after an
+/// animated one could go unseen there, leaving the instance before on screen.
+private struct DetailColumn: View {
+    @Environment(AppModel.self) private var model
+    @Binding var showingNewInstance: Bool
+
+    var body: some View {
+        if model.showingDashboard {
+            DashboardScreen(monitor: model.resources, showingNewInstance: $showingNewInstance)
+        } else if let instance = model.selectedInstance {
+            InstanceDetailView(instance: instance)
+        } else {
+            EmptyStateView(showingNewInstance: $showingNewInstance)
+        }
+    }
+}
+
 private struct BusyBar: View {
     let text: String
 
@@ -131,7 +150,7 @@ private struct BusyBar: View {
 }
 
 struct EmptyStateView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     @Binding var showingNewInstance: Bool
 
     var body: some View {

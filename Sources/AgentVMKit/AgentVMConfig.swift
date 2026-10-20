@@ -12,20 +12,11 @@ import Foundation
 
 /// Network posture, fixed at creation and recorded on the container as the
 /// `agentvm.net` label.
-public enum NetPosture: String, Sendable, CaseIterable, Identifiable, Codable {
+public enum NetPosture: String, Sendable, CaseIterable {
     /// The daemon's built-in bridge network: direct IP both ways, internet via NAT.
     case open = "open"
     /// The killswitch: a dedicated host-only network, no DNS, no egress.
     case killswitch = "none"
-
-    public var id: String { rawValue }
-
-    public var label: String {
-        switch self {
-        case .open: "open"
-        case .killswitch: "none"
-        }
-    }
 
     public var summary: String {
         switch self {
@@ -85,11 +76,6 @@ public struct AgentVMConfig: Sendable, Equatable {
     public var lockFileURL: URL { URL(filePath: lockFilePath) }
 
     // MARK: - Names
-
-    /// `coder` → `agentvm-coder`; an already-prefixed name passes through.
-    public func fullName(_ name: String) -> String {
-        name.hasPrefix(namePrefix) ? name : namePrefix + name
-    }
 
     /// `agentvm-coder` → `coder`.
     public func shortName(_ name: String) -> String {
@@ -171,7 +157,7 @@ public struct AgentVMConfig: Sendable, Equatable {
         try Self.template(for: self).write(to: url, atomically: true, encoding: .utf8)
     }
 
-    public static func writeTemplate(to url: URL) throws {
+    static func writeTemplate(to url: URL) throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try template(for: AgentVMConfig()).write(to: url, atomically: true, encoding: .utf8)

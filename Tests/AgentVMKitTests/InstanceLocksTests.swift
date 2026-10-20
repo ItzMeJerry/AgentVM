@@ -20,11 +20,9 @@ struct InstanceLocksTests {
 
     @discardableResult
     private func withTemporaryLocks<T>(_ body: (InstanceLocks) throws -> T) throws -> T {
-        let directory = URL(filePath: NSTemporaryDirectory())
-            .appending(path: "agentvm-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        return try body(InstanceLocks(url: directory.appending(path: "locks", directoryHint: .notDirectory)))
+        try withTemporaryDirectory {
+            try body(InstanceLocks(url: $0.appending(path: "locks", directoryHint: .notDirectory)))
+        }
     }
 
     /// Which file is there: an atomic write puts a new one in place.
@@ -166,22 +164,22 @@ struct InstanceLocksTests {
 
     @Test("Prune with an unreadable lock list stops before it asks the daemon for anything")
     func pruneFailsClosed() async throws {
-        let directory = URL(filePath: NSTemporaryDirectory())
-            .appending(path: "agentvm-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
-        let lockFile = directory.appending(path: "locks", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: lockFile, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        // A prefix nothing carries, should it ever get as far as the daemon.
-        let config = AgentVMConfig(
-            envFilePath: directory.appending(path: "env").path(percentEncoded: false),
-            lockFilePath: lockFile.path(percentEncoded: false),
-            namePrefix: "agentvmtest-\(UInt32.random(in: 0..<0xffff_ffff))-")
+        try await withTemporaryDirectory { directory in
+            // A directory where the list should be: there, but no list.
+            let lockFile = directory.appending(path: "locks", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: lockFile, withIntermediateDirectories: true)
+            // A prefix nothing carries, should it ever get as far as the daemon.
+            let config = AgentVMConfig(
+                envFilePath: directory.appending(path: "env").path(percentEncoded: false),
+                lockFilePath: lockFile.path(percentEncoded: false),
+                namePrefix: "agentvmtest-\(UInt32.random(in: 0..<0xffff_ffff))-")
 
-        do {
-            _ = try await AgentVMEngine().prune(config: config)
-            Issue.record("Prune went ahead without its lock list")
-        } catch let error as AgentVMError {
-            #expect(error.message.contains("lock list"), "\(error.message)")
+            do {
+                _ = try await AgentVMEngine().prune(config: config)
+                Issue.record("Prune went ahead without its lock list")
+            } catch let error as AgentVMError {
+                #expect(error.message.contains("lock list"), "\(error.message)")
+            }
         }
     }
 

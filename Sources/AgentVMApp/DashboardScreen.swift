@@ -16,8 +16,8 @@ import AppKit
 import SwiftUI
 
 struct DashboardScreen: View {
-    @EnvironmentObject private var model: AppModel
-    @ObservedObject var monitor: ResourceMonitor
+    @Environment(AppModel.self) private var model
+    let monitor: ResourceMonitor
     @Binding var showingNewInstance: Bool
     /// How far a back swipe has carried the page off, 0…1.
     @State private var swipe: CGFloat = 0

@@ -1,8 +1,9 @@
 //
 //  AgentVMEngine+Stats.swift
 //  Readings for the dashboard: an instance's counters and disk use, and what
-//  the container service stores. One XPC request each, through the client
-//  the rest of the engine uses.
+//  the container service stores. The counters, a bundle's size and the
+//  storage totals come from the service; how full a disk is comes from its
+//  image, which the service has no API for.
 //
 //  AgentVM — https://github.com/ItzMeJerry/AgentVM
 //  Copyright 2026 Jerry Lan
@@ -49,9 +50,7 @@ extension AgentVMEngine {
     public func storageSummary() async throws -> StorageSummary {
         let usage = try await ClientDiskUsage.get()
         func kind(_ resource: ResourceUsage) -> StorageSummary.Kind {
-            StorageSummary.Kind(
-                count: resource.total, active: resource.active, bytes: resource.sizeInBytes,
-                reclaimable: resource.reclaimable)
+            StorageSummary.Kind(count: resource.total, bytes: resource.sizeInBytes, reclaimable: resource.reclaimable)
         }
         return StorageSummary(
             images: kind(usage.images), containers: kind(usage.containers), volumes: kind(usage.volumes))

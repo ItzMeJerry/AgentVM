@@ -30,7 +30,10 @@ if [ "${1:-}" = "--all" ]; then
     echo "removed $BUILD ($before)"
     echo "the next build re-resolves and re-clones the package graph: budget 15–30 minutes."
 else
-    rm -rf "$BUILD/out" "$BUILD/debug" "$BUILD/release" "$BUILD/AgentVM.app" "$BUILD/artifacts"
+    # out/ for the default build system, arm64-apple-macosx/ for the native
+    # one; debug and release are links into whichever was used.
+    rm -rf "$BUILD/out" "$BUILD/arm64-apple-macosx" "$BUILD/debug" "$BUILD/release" "$BUILD/AgentVM.app" \
+        "$BUILD/artifacts"
     after="$(du -sh "$BUILD" 2>/dev/null | cut -f1)"
     echo "cleaned compiled output: $before → $after"
     echo "the checkouts are kept, so the next build only recompiles."

@@ -13,13 +13,13 @@ import SwiftUI
 
 @main
 struct AgentVMApplication: App {
-    @StateObject private var model = AppModel()
+    @State private var model = AppModel()
     @State private var showingNewInstance = false
 
     var body: some Scene {
         WindowGroup("AgentVM") {
             ContentView(showingNewInstance: $showingNewInstance)
-                .environmentObject(model)
+                .environment(model)
                 .frame(minWidth: 940, minHeight: 560)
         }
         .defaultSize(width: 1180, height: 720)
@@ -54,11 +54,13 @@ struct AgentVMApplication: App {
                 }
 
                 Menu("Layout", systemImage: "rectangle.split.2x2") {
+                    // Worked out once, not once per template.
+                    let current = model.selectedLayout?.matchingTemplate
                     ForEach(LayoutTemplate.allCases) { template in
                         Toggle(
                             template.title,
                             isOn: Binding(
-                                get: { model.selectedLayout?.matchingTemplate == template },
+                                get: { current == template },
                                 set: { _ in model.applyTemplateToSelection(template) }))
                     }
                     Divider()
@@ -154,7 +156,7 @@ struct AgentVMApplication: App {
         .windowResizability(.contentMinSize)
 
         Settings {
-            SettingsView().environmentObject(model)
+            SettingsView().environment(model)
         }
     }
 }

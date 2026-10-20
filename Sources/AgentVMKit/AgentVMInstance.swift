@@ -11,11 +11,15 @@ import ContainerResource
 import Foundation
 
 public struct AgentVMInstance: Identifiable, Sendable, Equatable {
+    /// The labels AgentVM records its choices in on every container it makes.
+    static let netLabel = "agentvm.net"
+    static let modeLabel = "agentvm.mode"
+
     public let fullName: String
     public let shortName: String
     public let state: RuntimeStatus
     /// As it applies on the next start: it changes with the main process.
-    public private(set) var mode: AgentVMMode
+    public let mode: AgentVMMode
     public let net: NetPosture
     public let image: String
     public let architecture: String
@@ -28,14 +32,14 @@ public struct AgentVMInstance: Identifiable, Sendable, Equatable {
     public let mounts: [MountDisplay]
     public let envKeys: [String]
     /// The main process, program first, as it runs on the next start.
-    public private(set) var command: [String]
+    public let command: [String]
     public let rosetta: Bool
     /// The dedicated internal network, for a killswitch instance.
     public let networkName: String?
     /// Host ports forwarded into the guest, as they apply on the next start.
-    public private(set) var ports: [PortMapping]
+    public let ports: [PortMapping]
     /// Removed by the daemon as it stops: a task created one-shot.
-    public private(set) var isOneShot = false
+    public let isOneShot: Bool
 
     public var id: String { fullName }
 
@@ -59,20 +63,32 @@ public struct AgentVMInstance: Identifiable, Sendable, Equatable {
     /// "running", "stopped", "stopping".
     public var stateLabel: String { state.rawValue }
 
-    public struct MountDisplay: Identifiable, Sendable, Equatable {
-        public let id = UUID()
+    /// No identity of its own: a fresh one each poll made every poll's list
+    /// differ from the last, and the same path can be mounted twice.
+    public struct MountDisplay: Sendable, Equatable {
         public let source: String
         public let destination: String
         public let readOnly: Bool
     }
 
-    public init(snapshot: ContainerSnapshot, config: AgentVMConfig) {
+    /// What can change while an instance is stopped — its ports, and its main
+    /// process and with it its mode — comes from `bundle`, the configuration
+    /// in the container's bundle, when it can be read: that's what the
+    /// runtime uses at start, while the daemon's in-memory copy refreshes
+    /// only when the daemon restarts. `oneShot` is from the bundle's options,
+    /// which the daemon keeps apart from the configuration it reports.
+    public init(
+        snapshot: ContainerSnapshot, config: AgentVMConfig, bundle: ContainerConfiguration? = nil,
+        oneShot: Bool = false
+    ) {
         let configuration = snapshot.configuration
+        let nextStart = bundle ?? configuration
+        let net = NetPosture(rawValue: configuration.labels[Self.netLabel] ?? "") ?? .open
         self.fullName = configuration.id
         self.shortName = config.shortName(configuration.id)
         self.state = snapshot.status
-        self.mode = AgentVMMode(rawValue: configuration.labels["agentvm.mode"] ?? "") ?? .task
-        self.net = NetPosture(rawValue: configuration.labels["agentvm.net"] ?? "") ?? .open
+        self.mode = AgentVMMode(rawValue: nextStart.labels[Self.modeLabel] ?? "") ?? .task
+        self.net = net
         self.image = configuration.image.reference
         self.architecture = configuration.platform.architecture
         self.ipv4 =
@@ -91,34 +107,11 @@ public struct AgentVMInstance: Identifiable, Sendable, Equatable {
         self.envKeys = configuration.initProcess.environment.compactMap {
             $0.split(separator: "=", maxSplits: 1).first.map(String.init)
         }
-        self.command = [configuration.initProcess.executable] + configuration.initProcess.arguments
+        self.command = [nextStart.initProcess.executable] + nextStart.initProcess.arguments
         self.rosetta = configuration.rosetta
-        self.networkName =
-            NetPosture(rawValue: configuration.labels["agentvm.net"] ?? "") == .killswitch
-            ? config.networkName(for: configuration.id) : nil
-        // The daemon's copy, which is stale after an edit; see `applying(bundle:)`.
-        self.ports = configuration.publishedPorts.map(PortMapping.init)
-    }
-
-    /// The configuration in the container's bundle, which is what the runtime
-    /// uses at start — the daemon's in-memory copy only refreshes when it
-    /// restarts. What changes while an instance is stopped comes from here.
-    func applying(bundle configuration: ContainerConfiguration?) -> AgentVMInstance {
-        guard let configuration else { return self }
-        var copy = self
-        copy.ports = configuration.publishedPorts.map(PortMapping.init)
-        copy.command = [configuration.initProcess.executable] + configuration.initProcess.arguments
-        copy.mode = AgentVMMode(rawValue: configuration.labels["agentvm.mode"] ?? "") ?? .task
-        return copy
-    }
-
-    /// Read from the bundle's options, which the daemon keeps apart from the
-    /// configuration it reports.
-    func withOneShot(_ oneShot: Bool?) -> AgentVMInstance {
-        guard let oneShot else { return self }
-        var copy = self
-        copy.isOneShot = oneShot
-        return copy
+        self.networkName = net == .killswitch ? config.networkName(for: configuration.id) : nil
+        self.ports = nextStart.publishedPorts.map(PortMapping.init)
+        self.isOneShot = oneShot
     }
 
     /// Ports can change only while no VM is running. (A one-shot never sits

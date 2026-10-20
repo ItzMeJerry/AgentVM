@@ -37,15 +37,14 @@ public actor AgentVMEngine {
 
     // MARK: - Preflight
 
-    public struct DaemonStatus: Sendable {
+    /// Equatable, so a poll that finds nothing new changes nothing on screen.
+    public struct DaemonStatus: Sendable, Equatable {
         public let running: Bool
         public let version: String?
         public let appRoot: String?
         public let message: String?
         /// The service's build kind, such as `release`.
         public var build: String? = nil
-        /// Where the service itself is installed.
-        public var installRoot: String? = nil
 
         /// What `daemonStatus()` reports when the service doesn't answer.
         public static let notRunning = DaemonStatus(
@@ -66,13 +65,14 @@ public actor AgentVMEngine {
     public func daemonStatus() async -> DaemonStatus {
         do {
             let health = try await ClientHealthCheck.ping(timeout: .seconds(5))
+            // Where the bundles are, for `containersRoot()`, which needn't ask again.
+            appRoot = health.appRoot
             return DaemonStatus(
                 running: true,
                 version: health.apiServerVersion,
                 appRoot: health.appRoot.path(percentEncoded: false),
                 message: nil,
-                build: health.apiServerBuild,
-                installRoot: health.installRoot.path(percentEncoded: false))
+                build: health.apiServerBuild)
         } catch {
             return .notRunning
         }
@@ -84,9 +84,7 @@ public actor AgentVMEngine {
         do {
             health = try await ClientHealthCheck.ping(timeout: .seconds(10))
         } catch {
-            throw AgentVMError(
-                "cannot reach the container system service",
-                hint: "Start it with `container system start`, then try again.")
+            throw AgentVMError.serviceUnreachable
         }
         let appRoot = FilePath(health.appRoot.path(percentEncoded: false))
         let installRoot = FilePath(health.installRoot.path(percentEncoded: false))
@@ -110,14 +108,13 @@ public actor AgentVMEngine {
         return
             snapshots
             .filter { config.isAgentVMName($0.id) }
-            .map { readingBundle(AgentVMInstance(snapshot: $0, config: config), in: root) }
+            .map { instance(from: $0, config: config, in: root) }
             .sorted { $0.fullName < $1.fullName }
     }
 
     public func instance(named fullName: String, config: AgentVMConfig) async throws -> AgentVMInstance {
         let snapshot = try await containers.get(id: fullName)
-        let root = await containersRoot()
-        return readingBundle(AgentVMInstance(snapshot: snapshot, config: config), in: root)
+        return instance(from: snapshot, config: config, in: await containersRoot())
     }
 
     /// `<app-root>/containers`, where each container's bundle lives.
@@ -146,7 +143,9 @@ public actor AgentVMEngine {
     ) async throws -> String {
         let systemConfig = try await loadSystemConfig()
 
-        guard !spec.image.trimmingCharacters(in: .whitespaces).isEmpty else {
+        // A pasted reference can end in a stray space, which wouldn't parse.
+        let image = spec.image.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !image.isEmpty else {
             throw AgentVMError("choose an image to boot (for example ubuntu:24.04)")
         }
         if spec.mode == .task && spec.command.isEmpty {
@@ -190,7 +189,7 @@ public actor AgentVMEngine {
         // Every field is passed explicitly: these are ArgumentParser types, and a
         // property that was neither parsed nor assigned faults when read.
         let management = Flags.Management(
-            arch: spec.arch.flatMap { $0.isEmpty ? nil : $0 } ?? Arch.hostArchitecture().rawValue,
+            arch: Arch.hostArchitecture().rawValue,
             capAdd: [],
             capDrop: [],
             cidfile: "",
@@ -203,7 +202,9 @@ public actor AgentVMEngine {
             initImage: nil,
             kernel: nil,
             kernelArgs: [],
-            labels: ["agentvm.net=\(spec.net.rawValue)", "agentvm.mode=\(spec.mode.rawValue)"],
+            labels: [
+                "\(AgentVMInstance.netLabel)=\(spec.net.rawValue)", "\(AgentVMInstance.modeLabel)=\(spec.mode.rawValue)",
+            ],
             maskedPaths: [],
             mounts: try spec.mounts.map { try $0.validated().mountArgument },
             name: fullName,
@@ -251,7 +252,7 @@ public actor AgentVMEngine {
         do {
             built = try await Utility.containerConfigFromFlags(
                 id: fullName,
-                image: spec.image,
+                image: image,
                 arguments: arguments,
                 process: process,
                 management: management,

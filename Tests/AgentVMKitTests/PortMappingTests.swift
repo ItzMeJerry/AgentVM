@@ -53,7 +53,7 @@ struct PortMappingTests {
     func udpProtocol() throws {
         let mapping = try PortMapping.parse("5353:53/udp")
         #expect(mapping.proto == "udp")
-        #expect(mapping.shortDescription == "5353 → 53/udp")
+        #expect(mapping.spec == "127.0.0.1:5353:53/udp")
     }
 
     @Test("A range keeps its width")
@@ -63,7 +63,6 @@ struct PortMappingTests {
         #expect(mapping.containerPort == 80)
         #expect(mapping.count == 3)
         #expect(mapping.spec == "127.0.0.1:8080-8082:80-82/tcp")
-        #expect(mapping.shortDescription == "8080-8082 → 80-82")
     }
 
     @Test("Surrounding whitespace is ignored")

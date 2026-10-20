@@ -10,7 +10,6 @@
 //  SPDX-License-Identifier: Apache-2.0
 //
 
-import AppKit
 import AgentVMKit
 import AgentVMLayout
 import SwiftUI
@@ -19,7 +18,7 @@ struct SessionsView: View {
     /// The coordinate space drags are measured in: tab bar and panes alike.
     static let space = "sessions"
 
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     let instance: AgentVMInstance
     @Namespace private var glass
 
@@ -39,9 +38,11 @@ struct SessionsView: View {
     var body: some View {
         VStack(spacing: 0) {
             if let layout, !sessions.isEmpty {
+                // What letting go here would do, worked out once a move.
+                let intent = drag.flatMap { intent(for: $0, in: layout) }
                 tabBar(layout)
                     .overlay {
-                        if drag.flatMap({ intent(for: $0, in: layout) }) == .unsplit {
+                        if intent == .unsplit {
                             Capsule()
                                 .strokeBorder(Color.accentColor.opacity(0.75), lineWidth: 2)
                                 .padding(3)
@@ -54,7 +55,7 @@ struct SessionsView: View {
                 // No rule under the tabs: their glass sets them apart.
                 PaneArea(
                     instance: instance, layout: layout, sessions: sessions,
-                    dropPreview: drag.flatMap { preview(for: $0, in: layout) },
+                    dropPreview: intent.flatMap { preview(for: $0, in: layout) },
                     drag: PaneDragHandlers(changed: dragChanged, ended: dragEnded))
                     .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.space)) } action: {
                         paneAreaFrame = $0
@@ -108,8 +109,8 @@ struct SessionsView: View {
 
     /// The part of the pane area a drop would take, in the pane area's own
     /// coordinates.
-    private func preview(for drag: PaneDrag, in layout: PaneLayout) -> CGRect? {
-        guard case .snap(let target)? = intent(for: drag, in: layout) else { return nil }
+    private func preview(for intent: Intent, in layout: PaneLayout) -> CGRect? {
+        guard case .snap(let target) = intent else { return nil }
         let bounds = CGRect(origin: .zero, size: paneAreaFrame.size)
         guard let frame = layout.frames(in: bounds, gap: PaneMetrics.gap(glass: model.glassSessions))[target.pane]
         else { return nil }
@@ -177,7 +178,7 @@ struct SessionsView: View {
                             ForEach(Array(sessions.enumerated()), id: \.element.id) { index, session in
                                 SessionTab(
                                     session: session,
-                                    index: index + 1,
+                                    shortcut: SessionTab.shortcut(forTab: index + 1, of: sessions.count),
                                     isSelected: layout.focusedSession == session.id,
                                     isOnScreen: layout.isSplit && layout.contains(session: session.id),
                                     namespace: glass,
@@ -217,7 +218,7 @@ struct SessionsView: View {
                 .buttonBorderShape(.circle)
                 .featureTip("Snap layouts")
                 .popover(isPresented: $showingLayouts, arrowEdge: .bottom) {
-                    LayoutPicker(current: layout.matchingTemplate, mode: $model.paneResizeMode) { template, zone in
+                    LayoutPicker(current: layout.matchingTemplate, mode: Bindable(model).paneResizeMode) { template, zone in
                         withAnimation(.snappy(duration: 0.25)) {
                             model.applyTemplate(template, focusZone: zone, in: name)
                         }
@@ -269,8 +270,9 @@ private struct DragLabel: View {
 }
 
 private struct SessionTab: View {
-    @ObservedObject var session: TerminalSession
-    let index: Int
+    let session: TerminalSession
+    /// "⌘3", for the tabs a shortcut selects.
+    let shortcut: String?
     /// The session in the focused pane.
     let isSelected: Bool
     /// In one of the split's other panes.
@@ -285,6 +287,13 @@ private struct SessionTab: View {
 
     @State private var hovering = false
     @State private var hoveringClose = false
+
+    /// ⌘1 to ⌘8 select the first eight tabs, and ⌘9 the last, as in Safari
+    /// and Terminal: the ninth of ten has no shortcut of its own.
+    static func shortcut(forTab number: Int, of count: Int) -> String? {
+        if number <= 8 { return "⌘\(number)" }
+        return number == count ? "⌘9" : nil
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -319,8 +328,8 @@ private struct SessionTab: View {
                 .frame(maxWidth: 180, alignment: .leading)
                 .foregroundStyle(session.state.isFinished ? .secondary : .primary)
 
-            if index <= 9 {
-                Text("⌘\(index)")
+            if let shortcut {
+                Text(shortcut)
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
@@ -362,8 +371,8 @@ private struct SessionTab: View {
 /// Floats over the terminal: a way back to the live screen while reading the
 /// scrollback, and, once the session has ended, what happened and what next.
 struct SessionOverlay: View {
-    @EnvironmentObject private var model: AppModel
-    @ObservedObject var session: TerminalSession
+    @Environment(AppModel.self) private var model
+    let session: TerminalSession
     /// Only the focused pane's Reopen answers Return; in a split, another
     /// pane's Return belongs to the shell running there.
     let isFocused: Bool

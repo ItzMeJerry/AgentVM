@@ -12,8 +12,7 @@ import AgentVMKit
 import SwiftUI
 
 struct PortsSheet: View {
-    @EnvironmentObject private var model: AppModel
-    @Environment(\.dismiss) private var dismiss
+    @Environment(AppModel.self) private var model
 
     /// The instance as it was when the sheet opened; the live one is looked up
     /// by name, so a Stop from here unlocks the editor.
@@ -21,35 +20,21 @@ struct PortsSheet: View {
 
     @State private var rows: [PortRow] = []
     @State private var original: [PortMapping] = []
-    @State private var saving = false
-    @State private var error: String?
 
     private var live: AgentVMInstance {
         model.instances.first { $0.fullName == instance.fullName } ?? instance
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("Ports").font(.title3.weight(.semibold))
-                Text(live.shortName).font(.title3).foregroundStyle(.secondary)
-                Spacer()
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
-            .padding(.bottom, 4)
-
-            Form {
-                if !live.canEditPorts { stopSection }
-                portsSection
-            }
-            .formStyle(.grouped)
-            // A bar the form scrolls under, not a section behind a rule; the
-            // firmer edge keeps buttons legible over a long list of ports.
-            .safeAreaBar(edge: .bottom) { footer }
-            .scrollEdgeEffectStyle(.hard, for: .bottom)
+        InstanceEditSheet(
+            title: "Ports", instance: live, what: "its ports", canChange: live.canEditPorts,
+            size: CGSize(width: 600, height: 470), problem: validationProblem, canSave: canSave
+        ) { thenStart in
+            guard case .success(let mappings) = parsed else { return nil }
+            return await model.setPorts(mappings, on: live, thenStart: thenStart)
+        } content: {
+            portsSection
         }
-        .frame(width: 600, height: 470)
         .onAppear {
             original = live.ports
             rows = live.ports.map(PortRow.init)
@@ -61,23 +46,6 @@ struct PortsSheet: View {
     }
 
     // MARK: - Parts
-
-    private var stopSection: some View {
-        Section {
-            HStack(spacing: 10) {
-                Label(
-                    live.isRunning
-                        ? "\(live.shortName) is running. Stop it to change its ports; its sessions end."
-                        : "\(live.shortName) is \(live.stateLabel). Ports can change once it has stopped.",
-                    systemImage: "stop.circle")
-                Spacer()
-                if live.isRunning {
-                    Button("Stop") { Task { await model.stop(live) } }
-                        .disabled(model.busy != nil)
-                }
-            }
-        }
-    }
 
     private var portsSection: some View {
         Section {
@@ -114,7 +82,6 @@ struct PortsSheet: View {
         } footer: {
             notes
         }
-        .disabled(!live.canEditPorts || saving)
     }
 
     @ViewBuilder
@@ -149,36 +116,6 @@ struct PortsSheet: View {
         }
     }
 
-    private var footer: some View {
-        HStack(spacing: 10) {
-            if saving, let busy = model.busy {
-                ProgressView().controlSize(.small)
-                Text(busy).font(.callout).foregroundStyle(.secondary)
-            } else if let problem = error ?? validationProblem {
-                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
-                Text(problem)
-                    .font(.callout)
-                    .lineLimit(3)
-                    .textSelection(.enabled)
-            }
-            Spacer()
-            Button("Cancel") { dismiss() }
-                .keyboardShortcut(.cancelAction)
-                .buttonStyle(.glass)
-            if live.canEditPorts {
-                Button("Save") { save(start: false) }
-                    .buttonStyle(.glass)
-                    .disabled(!canSave)
-                Button("Save and Start") { save(start: true) }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.glassProminent)
-                    .disabled(!canSave)
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
-    }
-
     // MARK: - State
 
     /// Rows with nothing typed in them don't count.
@@ -198,25 +135,14 @@ struct PortsSheet: View {
     }
 
     private var canSave: Bool {
-        guard !saving, case .success(let mappings) = parsed else { return false }
+        guard case .success(let mappings) = parsed else { return false }
         return mappings != original
-    }
-
-    private func save(start: Bool) {
-        guard case .success(let mappings) = parsed else { return }
-        saving = true
-        error = nil
-        Task {
-            let failure = await model.setPorts(mappings, on: live, thenStart: start)
-            saving = false
-            if let failure { error = failure } else { dismiss() }
-        }
     }
 }
 
 /// One mapping as typed: the fields stay text until saved, so a half-typed
 /// range isn't rejected keystroke by keystroke.
-struct PortRow: Identifiable, Equatable {
+struct PortRow: Identifiable {
     let id = UUID()
     var address = ""
     var hostPort = ""

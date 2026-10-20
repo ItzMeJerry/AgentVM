@@ -43,6 +43,11 @@ public enum ResourceFormat {
         return format(bytes, style: .file) + "/s"
     }
 
+    /// "1 process", "4 processes".
+    public static func processes(_ count: some BinaryInteger) -> String {
+        count == 1 ? "1 process" : "\(count) processes"
+    }
+
     /// How long an instance has been up: "45s", "5m", "2h 13m", "3d 4h".
     public static func uptime(_ interval: TimeInterval) -> String {
         let formatter = DateComponentsFormatter()

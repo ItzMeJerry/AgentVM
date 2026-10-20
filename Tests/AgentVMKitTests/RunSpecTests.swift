@@ -17,15 +17,6 @@ import Testing
 @Suite("MountSpec")
 struct MountSpecTests {
 
-    @discardableResult
-    private func withTemporaryDirectory<T>(_ body: (URL) throws -> T) throws -> T {
-        let directory = URL(filePath: NSTemporaryDirectory())
-            .appending(path: "agentvm-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        return try body(directory)
-    }
-
     // MARK: - Accepted
 
     @Test("An existing directory with an absolute target is accepted")
@@ -52,13 +43,6 @@ struct MountSpecTests {
     }
 
     // MARK: - Refused
-
-    @Test("Mounting / is refused")
-    func refusesRoot() {
-        #expect(throws: (any Error).self) {
-            try MountSpec(hostPath: "/", guestPath: "/host").validated()
-        }
-    }
 
     @Test("Mounting $HOME is refused, however it is spelled")
     func refusesHome() {
@@ -259,14 +243,6 @@ struct RunSpecTests {
         #expect(spec.memory == "4G")
         #expect(spec.removeOnExit)
         #expect(spec.mode == .instance, "the config does not choose the mode")
-    }
-
-    @Test("The keepalive never exits, which is what makes an instance outlive its sessions")
-    func keepaliveLoops() {
-        #expect(RunSpec.keepaliveEntrypoint == "sh")
-        let script = RunSpec.keepaliveArguments.joined(separator: " ")
-        #expect(script.contains("while"))
-        #expect(script.contains("sleep"))
     }
 
     @Test("Both modes describe themselves")

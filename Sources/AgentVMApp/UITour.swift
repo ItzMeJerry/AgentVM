@@ -266,16 +266,16 @@ enum UITour {
         }
 
         // Sheets and windows, each in a window of its own.
-        await render(NewInstanceSheet().environmentObject(model), "11-new-instance", in: directory)
-        await render(PortsSheet(instance: demo).environmentObject(model), "12-ports", in: directory)
+        await render(NewInstanceSheet().environment(model), "11-new-instance", in: directory)
+        await render(PortsSheet(instance: demo).environment(model), "12-ports", in: directory)
         if let offline = model.instances.first(where: { $0.shortName == "offline" }) {
             // Stopped, so it can change: shown part-way to becoming a task.
             await render(
                 MainProcessSheet(instance: offline, draft: (.task, "python3 -m http.server 8000"))
-                    .environmentObject(model),
+                    .environment(model),
                 "12b-main-process", in: directory)
         }
-        await render(SettingsView().environmentObject(model), "13-settings", in: directory)
+        await render(SettingsView().environment(model), "13-settings", in: directory)
         await render(HelpView(), "14-help", in: directory)
         await render(
             LayoutPicker(current: .halves, mode: .constant(.snap)) { _, _ in }, "15-layout-picker", in: directory)

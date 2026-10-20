@@ -13,8 +13,7 @@ import AgentVMKit
 import SwiftUI
 
 struct MainProcessSheet: View {
-    @EnvironmentObject private var model: AppModel
-    @Environment(\.dismiss) private var dismiss
+    @Environment(AppModel.self) private var model
 
     /// The instance as it was when the sheet opened; the live one is looked up
     /// by name, so a Stop from here unlocks the editor.
@@ -24,33 +23,21 @@ struct MainProcessSheet: View {
 
     @State private var mode: AgentVMMode = .instance
     @State private var commandText = ""
-    @State private var saving = false
-    @State private var error: String?
 
     private var live: AgentVMInstance {
         model.instances.first { $0.fullName == instance.fullName } ?? instance
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("Main Process").font(.title3.weight(.semibold))
-                Text(live.shortName).font(.title3).foregroundStyle(.secondary)
-                Spacer()
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 16)
-            .padding(.bottom, 4)
-
-            Form {
-                if !live.canChangeMainProcess { stopSection }
-                processSection
-            }
-            .formStyle(.grouped)
-            .safeAreaBar(edge: .bottom) { footer }
-            .scrollEdgeEffectStyle(.hard, for: .bottom)
+        InstanceEditSheet(
+            title: "Main Process", instance: live, what: "what it runs", canChange: live.canChangeMainProcess,
+            size: CGSize(width: 560, height: 430), problem: validationProblem, canSave: canSave
+        ) { thenStart in
+            guard case .success(let process) = parsed else { return nil }
+            return await model.setMainProcess(process, on: live, thenStart: thenStart)
+        } content: {
+            processSection
         }
-        .frame(width: 560, height: 430)
         .onAppear {
             mode = draft?.mode ?? live.mode
             commandText = draft?.command ?? (live.mode == .task ? ShellWords.join(live.command) : "")
@@ -58,23 +45,6 @@ struct MainProcessSheet: View {
     }
 
     // MARK: - Parts
-
-    private var stopSection: some View {
-        Section {
-            HStack(spacing: 10) {
-                Label(
-                    live.isRunning
-                        ? "\(live.shortName) is running. Stop it to change what it runs; its sessions end."
-                        : "\(live.shortName) is \(live.stateLabel). What it runs can change once it has stopped.",
-                    systemImage: "stop.circle")
-                Spacer()
-                if live.isRunning {
-                    Button("Stop") { Task { await model.stop(live) } }
-                        .disabled(model.busy != nil)
-                }
-            }
-        }
-    }
 
     private var processSection: some View {
         Section {
@@ -109,37 +79,6 @@ struct MainProcessSheet: View {
                 )
             }
         }
-        .disabled(!live.canChangeMainProcess || saving)
-    }
-
-    private var footer: some View {
-        HStack(spacing: 10) {
-            if saving, let busy = model.busy {
-                ProgressView().controlSize(.small)
-                Text(busy).font(.callout).foregroundStyle(.secondary)
-            } else if let problem = error ?? validationProblem {
-                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
-                Text(problem)
-                    .font(.callout)
-                    .lineLimit(3)
-                    .textSelection(.enabled)
-            }
-            Spacer()
-            Button("Cancel") { dismiss() }
-                .keyboardShortcut(.cancelAction)
-                .buttonStyle(.glass)
-            if live.canChangeMainProcess {
-                Button("Save") { save(start: false) }
-                    .buttonStyle(.glass)
-                    .disabled(!canSave)
-                Button("Save and Start") { save(start: true) }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.glassProminent)
-                    .disabled(!canSave)
-            }
-        }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 14)
     }
 
     // MARK: - State
@@ -160,18 +99,7 @@ struct MainProcessSheet: View {
     private var current: MainProcess? { try? MainProcess(mode: live.mode, command: live.command) }
 
     private var canSave: Bool {
-        guard !saving, case .success(let process) = parsed else { return false }
+        guard case .success(let process) = parsed else { return false }
         return process != current
-    }
-
-    private func save(start: Bool) {
-        guard case .success(let process) = parsed else { return }
-        saving = true
-        error = nil
-        Task {
-            let failure = await model.setMainProcess(process, on: live, thenStart: start)
-            saving = false
-            if let failure { error = failure } else { dismiss() }
-        }
     }
 }

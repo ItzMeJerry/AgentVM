@@ -25,7 +25,7 @@ let package = Package(
         // apiserver must agree.
         .package(url: "https://github.com/apple/container.git", exact: "1.3.0"),
         // Pulled in transitively by `container`; declared here so the app can name
-        // its types (ContainerizationError, Terminal.Size, Platform) directly.
+        // its types (ContainerizationError, Terminal.Size) directly.
         .package(url: "https://github.com/apple/containerization.git", exact: "0.41.0"),
         // 1.20.0 brings line-accurate trackpad scrolling, Alternate Scroll Mode
         // (DECSET 1007) and correct wheel reporting, so the app uses SwiftTerm's own
@@ -45,11 +45,11 @@ let package = Package(
                 .product(name: "ContainerAPIClient", package: "container"),
                 .product(name: "ContainerResource", package: "container"),
                 .product(name: "ContainerPersistence", package: "container"),
-                // RuntimeConfiguration, for editing a stopped container's ports.
+                // RuntimeConfiguration, for editing a stopped container's ports
+                // and main process.
                 .product(name: "ContainerRuntimeClient", package: "container"),
                 .product(name: "TerminalProgress", package: "container"),
                 .product(name: "Containerization", package: "containerization"),
-                .product(name: "ContainerizationOCI", package: "containerization"),
                 .product(name: "ContainerizationOS", package: "containerization"),
                 .product(name: "ContainerizationExtras", package: "containerization"),
                 // The ext4 superblock type, for reading how full an instance's
@@ -78,9 +78,8 @@ let package = Package(
             exclude: ["Shaders"],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
-        // Everything here runs without a daemon, a VM or a network: the tests
-        // cover the pure logic — port specs, the config file, the env registry,
-        // mount and name validation — against temporary directories only.
+        // Everything here but the Integration suite runs without a daemon, a VM
+        // or a network; that suite runs only with AGENTVM_INTEGRATION=1.
         .testTarget(
             name: "AgentVMKitTests",
             dependencies: [

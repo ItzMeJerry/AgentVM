@@ -48,21 +48,11 @@ if [ ! -x "$BINARY" ]; then
     exit 1
 fi
 
-rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BINARY" "$APP/Contents/MacOS/AgentVM"
-
-# SwiftPM resource bundles. Bundle.module finds them next to the executable or
-# in Resources; put them in Resources.
-for bundle in "$BIN_DIR"/*.bundle; do
-    [ -e "$bundle" ] || continue
-    cp -R "$bundle" "$APP/Contents/Resources/"
-done
-
 # SwiftTerm's Metal renderer loads the app's default Metal library before its
 # own, so AgentVM's copy of its shaders goes there: the one change in it is how
 # dark text is blended (see the file). Being a copy, it has to match the
-# SwiftTerm it was copied from, which this checks first.
+# SwiftTerm it was copied from, which this checks first. Both happen before
+# the app already built is touched, so a failure leaves that one working.
 SHADERS="$ROOT/Sources/AgentVMApp/Shaders/TerminalShaders.metal"
 UPSTREAM_SHADERS="$ROOT/.build/checkouts/SwiftTerm/Sources/SwiftTerm/Apple/Metal/Shaders.metal"
 UPSTREAM_SHADERS_SHA256="5f9f1d64f238821d11e4eda5f33c933d85d4e7f124a2c3bd8a930f8726b2fc12" # SwiftTerm 1.20.0
@@ -80,9 +70,30 @@ MESSAGE
     exit 1
 fi
 SHADER_BUILD="$(mktemp -d)"
+trap 'rm -rf "$SHADER_BUILD"' EXIT
 xcrun -sdk macosx metal -c "$SHADERS" -o "$SHADER_BUILD/TerminalShaders.air"
-xcrun -sdk macosx metallib "$SHADER_BUILD/TerminalShaders.air" -o "$APP/Contents/Resources/default.metallib"
-rm -rf "$SHADER_BUILD"
+xcrun -sdk macosx metallib "$SHADER_BUILD/TerminalShaders.air" -o "$SHADER_BUILD/default.metallib"
+
+rm -rf "$APP"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp "$BINARY" "$APP/Contents/MacOS/AgentVM"
+cp "$SHADER_BUILD/default.metallib" "$APP/Contents/Resources/default.metallib"
+
+# Symbols are more than half of a release binary — 38 of its 68 MB — and
+# nothing reads them at run time. SwiftPM keeps them in
+# .build/release/agentvm-gui.dSYM, which still symbolicates a crash report:
+# stripping leaves the binary's UUID as it was. A debug build keeps them.
+if [ "$CONFIGURATION" = "release" ]; then
+    codesign --remove-signature "$APP/Contents/MacOS/AgentVM"
+    xcrun strip "$APP/Contents/MacOS/AgentVM"
+fi
+
+# SwiftPM resource bundles. Bundle.module finds them next to the executable or
+# in Resources; put them in Resources.
+for bundle in "$BIN_DIR"/*.bundle; do
+    [ -e "$bundle" ] || continue
+    cp -R "$bundle" "$APP/Contents/Resources/"
+done
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

@@ -17,8 +17,11 @@ import AgentVMKit
 import SwiftTerm
 import SwiftUI
 
+/// Observable: its tab redraws when its state or title changes, and a shell
+/// that sets the same title at every prompt changes nothing.
 @MainActor
-final class TerminalSession: ObservableObject, Identifiable {
+@Observable
+final class TerminalSession: Identifiable {
     enum State: Equatable {
         case starting
         case running
@@ -36,21 +39,21 @@ final class TerminalSession: ObservableObject, Identifiable {
     let id = UUID()
     let instanceName: String
     let command: [String]
-    @Published private(set) var state: State = .starting
+    private(set) var state: State = .starting
     /// What the program inside called itself (OSC 0/2), if anything.
-    @Published private(set) var programTitle: String?
+    private(set) var programTitle: String?
     /// Reading the scrollback rather than the live screen.
-    @Published private(set) var isScrolledBack = false
+    private(set) var isScrolledBack = false
 
     /// The view is owned by the session, so switching tabs keeps the scrollback.
     let terminalView: AgentVMTerminalView
 
-    private var session: AgentVMShellSession?
-    private var waiter: Task<Void, Never>?
+    @ObservationIgnored private var session: AgentVMShellSession?
+    @ObservationIgnored private var waiter: Task<Void, Never>?
     /// The most recent resize sent to the guest; the next one waits for it.
-    private var lastResize: Task<Void, Never>?
+    @ObservationIgnored private var lastResize: Task<Void, Never>?
     /// The guest closed its end; everything it wrote has arrived.
-    private var outputEnded = false
+    @ObservationIgnored private var outputEnded = false
 
     init(instanceName: String, command: [String], fontSize: CGFloat) {
         self.instanceName = instanceName
@@ -202,10 +205,7 @@ extension TerminalSession: TerminalViewDelegate {
     }
     nonisolated func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
     nonisolated func scrolled(source: TerminalView, position: Double) {
-        MainActor.assumeIsolated {
-            let back = source.canScroll && position < 1
-            if back != isScrolledBack { isScrolledBack = back }
-        }
+        MainActor.assumeIsolated { isScrolledBack = source.canScroll && position < 1 }
     }
     nonisolated func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
         guard let url = URL(string: link) else { return }

@@ -11,7 +11,7 @@ import AgentVMKit
 import SwiftUI
 
 struct InstanceDetailView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     let instance: AgentVMInstance
 
     enum Tab: String, CaseIterable, Identifiable {

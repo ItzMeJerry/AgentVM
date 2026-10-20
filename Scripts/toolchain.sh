@@ -13,12 +13,6 @@
 # Copyright 2026 Jerry Lan
 # SPDX-License-Identifier: Apache-2.0
 
-# Sets SWIFT_PLUGIN_FLAGS to the -plugin-path flags `swift` needs, or to
-# nothing when the selected toolchain already knows where its plugins are.
-# Returns non-zero, with an explanation, when no plugin can be found at all.
-#
-#   swift_plugin_flags || exit 1
-#   swift build "${SWIFT_PLUGIN_FLAGS[@]}"
 # Where the running `swift` keeps its swift-testing macro plugin, or nothing.
 _swift_toolchain_testing_plugins() {
     local binary directory
@@ -29,16 +23,20 @@ _swift_toolchain_testing_plugins() {
     return 0
 }
 
+# Sets SWIFT_PLUGIN_FLAGS to the -plugin-path flags `swift` needs. Returns
+# non-zero, with an explanation, when no plugin can be found at all. On
+# success the flags are never empty: bash 3.2 calls an empty array unbound
+# under `set -u`, which would stop the scripts that pass them on.
+#
+#   swift_plugin_flags || exit 1
+#   swift build "${SWIFT_PLUGIN_FLAGS[@]}"
 swift_plugin_flags() {
     SWIFT_PLUGIN_FLAGS=()
 
     local selected plugins
     selected="$(xcode-select -p 2>/dev/null || true)"
-    if [ -n "$selected" ] && [ -e "$selected/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/libSwiftUIMacros.dylib" ]; then
-        return 0
-    fi
-
     for plugins in \
+        "$selected/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins" \
         "$selected/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins" \
         /Applications/Xcode*.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/swift/host/plugins
     do

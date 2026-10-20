@@ -41,11 +41,6 @@ public struct PortMapping: Identifiable, Sendable, Equatable, Hashable {
         return "\(address):\(Self.range(hostPort, count)):\(Self.range(containerPort, count))/\(proto)"
     }
 
-    /// `8080 → 80`, for places without room for the address and protocol.
-    public var shortDescription: String {
-        "\(Self.range(hostPort, count)) → \(Self.range(containerPort, count))" + (proto == "udp" ? "/udp" : "")
-    }
-
     private static func range(_ start: UInt16, _ count: UInt16) -> String {
         count > 1 ? "\(start)-\(Int(start) + Int(count) - 1)" : "\(start)"
     }
@@ -84,8 +79,10 @@ public struct PortMapping: Identifiable, Sendable, Equatable, Hashable {
     }
 
     /// The checks the daemon applies at start, applied before anything is
-    /// written: a set it would refuse must never reach the disk.
-    public static func validate(_ mappings: [PortMapping]) throws {
+    /// written: a set it would refuse must never reach the disk. Returns the
+    /// mappings as the daemon's own type, ready to write.
+    @discardableResult
+    public static func validate(_ mappings: [PortMapping]) throws -> [PublishPort] {
         guard mappings.count <= limit else {
             throw AgentVMError("at most \(limit) port mappings are allowed")
         }
@@ -106,5 +103,6 @@ public struct PortMapping: Identifiable, Sendable, Equatable, Hashable {
         guard !ports.hasOverlaps() else {
             throw AgentVMError("host ports may not overlap")
         }
+        return ports
     }
 }

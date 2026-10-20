@@ -1,8 +1,8 @@
 //
 //  HelpView.swift
 //  Help > AgentVM Help: what each toolbar button and instance action does, in
-//  full, and how split panes work. The buttons' tooltips only name them; this
-//  is where the detail lives.
+//  full, how the dashboard reads, and how sessions and split panes work. The
+//  buttons' tooltips only name them; this is where the detail lives.
 //
 //  AgentVM — https://github.com/ItzMeJerry/AgentVM
 //  Copyright 2026 Jerry Lan

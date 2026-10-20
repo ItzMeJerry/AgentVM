@@ -18,11 +18,7 @@ struct EnvRegistryTests {
 
     @discardableResult
     private func withTemporaryRegistry<T>(_ body: (EnvRegistry) throws -> T) throws -> T {
-        let directory = URL(filePath: NSTemporaryDirectory())
-            .appending(path: "agentvm-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        return try body(EnvRegistry(url: directory.appending(path: "env", directoryHint: .notDirectory)))
+        try withTemporaryDirectory { try body(EnvRegistry(url: $0.appending(path: "env", directoryHint: .notDirectory))) }
     }
 
     private func mode(of registry: EnvRegistry) throws -> Int {
@@ -209,8 +205,13 @@ struct EnvRegistryTests {
     func recordsModificationDate() throws {
         try withTemporaryRegistry { registry in
             try registry.set("A", "1")
-            let first = try #require(registry.modifiedAt)
-            #expect(first.timeIntervalSinceNow < 5)
+            // As if it were written long ago.
+            try FileManager.default.setAttributes([.modificationDate: Date.distantPast], ofItemAtPath: registry.path)
+            let before = try #require(registry.modifiedAt)
+            #expect(before < Date(timeIntervalSinceNow: -3_600))
+            try registry.set("B", "2")
+            let after = try #require(registry.modifiedAt)
+            #expect(after.timeIntervalSinceNow > -5, "the write moved it to now")
         }
     }
 }

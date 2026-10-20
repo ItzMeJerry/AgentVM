@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 #
-# Runs the AgentVMKit test suite.
+# Runs the unit tests, AgentVMKit's and AgentVMLayout's.
 #
 #   bash Scripts/test.sh [extra swift test arguments...]
 #
-# The tests need no daemon, no VM and no network: they cover the pure logic —
-# port specs, the config file, the env registry, mount and name validation —
-# against temporary directories only. Nothing in ~/.config/agentvm is read or
-# written, and no container is created.
+# They need no daemon, no VM and no network: they check the logic that stands
+# on its own, against files of their own. Nothing in ~/.config/agentvm is read
+# or written, and no container is created. The integration tests, which do
+# talk to the daemon, run only when asked for:
+#
+#   AGENTVM_INTEGRATION=1 bash Scripts/test.sh --filter Integration
+#
+# CONTRIBUTING.md lists what each suite covers.
 #
 # AgentVM — https://github.com/ItzMeJerry/AgentVM
 # Copyright 2026 Jerry Lan

@@ -187,12 +187,12 @@ struct RemovingTests {
     @Test("A removed pane's space goes to the others in proportion to their size")
     func proportional() {
         var first = threeColumns()
-        let changed8 = first.remove(session: a)
+        let changed8 = first.remove(pane: .session(a))
         #expect(changed8)
         #expect(approx(shares(first.root), [0.5, 0.5]))
 
         var middle = threeColumns()
-        let changed9 = middle.remove(session: b)
+        let changed9 = middle.remove(pane: .session(b))
         #expect(changed9)
         #expect(approx(shares(middle.root), [2.0 / 3, 1.0 / 3]))
         #expect(middle.leaves == [s(a), s(c)])
@@ -202,7 +202,7 @@ struct RemovingTests {
     func collapses() {
         var layout = pair(a, b)
         layout.snap(session: c, to: DropTarget(pane: s(b), zone: .bottom))  // a | (b / c)
-        let changed10 = layout.remove(session: c)
+        let changed10 = layout.remove(pane: .session(c))
         #expect(changed10)
         #expect(layout.root == .split(.horizontal, [.leaf(s(a)), .leaf(s(b))], [0.5, 0.5]))
     }
@@ -212,7 +212,7 @@ struct RemovingTests {
         var layout = pair(a, b)
         layout.snap(session: c, to: DropTarget(pane: s(b), zone: .bottom))  // a | (b / c)
         layout.snap(session: d, to: DropTarget(pane: s(c), zone: .right))  // a | (b / (c | d))
-        let changed11 = layout.remove(session: b)
+        let changed11 = layout.remove(pane: .session(b))
         #expect(changed11)
         // (c | d) is now directly inside a horizontal split: it joins it.
         #expect(layout.root == .split(.horizontal, [.leaf(s(a)), .leaf(s(c)), .leaf(s(d))], [0.5, 0.25, 0.25]))
@@ -221,7 +221,7 @@ struct RemovingTests {
     @Test("The last pane can't be removed")
     func lastPane() {
         var layout = PaneLayout(session: a)
-        let changed12 = layout.remove(session: a)
+        let changed12 = layout.remove(pane: .session(a))
         #expect(!changed12)
         #expect(layout.leaves == [s(a)])
     }
@@ -230,7 +230,7 @@ struct RemovingTests {
     func notOnScreen() {
         var layout = pair(a, b)
         let before = layout
-        let changed13 = layout.remove(session: c)
+        let changed13 = layout.remove(pane: .session(c))
         #expect(!changed13)
         #expect(layout == before)
     }
@@ -239,17 +239,17 @@ struct RemovingTests {
     func focusMoves() {
         var layout = threeColumns()
         layout.focus(s(b))
-        layout.remove(session: b)
+        layout.remove(pane: .session(b))
         #expect(layout.focused == s(a), "the pane before it")
 
         var first = threeColumns()
         first.focus(s(a))
-        first.remove(session: a)
+        first.remove(pane: .session(a))
         #expect(first.focused == s(b), "or the one after, if it was first")
 
         var other = threeColumns()
         other.focus(s(c))
-        other.remove(session: a)
+        other.remove(pane: .session(a))
         #expect(other.focused == s(c), "removing another pane leaves the focus alone")
     }
 

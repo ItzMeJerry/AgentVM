@@ -34,7 +34,7 @@ enum PaneMetrics {
 }
 
 /// A session being dragged by its tab or its pane's header.
-struct PaneDrag: Equatable {
+struct PaneDrag {
     let sessionID: UUID
     let title: String
     var location: CGPoint
@@ -67,7 +67,7 @@ struct PaneArea: View {
     let dropPreview: CGRect?
     let drag: PaneDragHandlers
 
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         GeometryReader { geometry in
@@ -143,7 +143,7 @@ private struct PaneView: View {
     let hiddenSessions: [TerminalSession]
     let drag: PaneDragHandlers
 
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
 
     /// Concentric with the window where a pane meets its corners, and never
     /// tighter than the minimum elsewhere.
@@ -197,7 +197,7 @@ private struct PaneHeader: View {
     let isFocused: Bool
     let drag: PaneDragHandlers
 
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         HStack(spacing: 6) {
@@ -243,7 +243,7 @@ private struct PaneHeader: View {
 }
 
 private struct PaneHeaderTitle: View {
-    @ObservedObject var session: TerminalSession
+    let session: TerminalSession
 
     var body: some View {
         HStack(spacing: 6) {
@@ -266,7 +266,7 @@ private struct EmptyPane: View {
     let content: PaneContent
     let hiddenSessions: [TerminalSession]
 
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         VStack(spacing: 10) {

@@ -204,12 +204,9 @@ public struct PaneLayout: Hashable, Sendable {
         return true
     }
 
-    /// Takes a session off the screen; it stays a tab. The panes around it grow
-    /// into its space, in proportion. The last pane can't be removed.
-    @discardableResult
-    public mutating func remove(session id: UUID) -> Bool { removeLeaf(.session(id)) }
-
-    /// The same for any pane, including an empty zone.
+    /// Takes a pane out — a session's, which stays a tab, or an empty zone.
+    /// The panes around it grow into its space, in proportion. The last pane
+    /// can't be removed.
     @discardableResult
     public mutating func remove(pane: PaneContent) -> Bool { removeLeaf(pane) }
 
@@ -240,13 +237,12 @@ public struct PaneLayout: Hashable, Sendable {
         _ id: DividerID, to requested: Double, mode: ResizeMode, length: Double, minimumSize: CGSize,
         gap: Double = 0
     ) -> Bool {
-        guard case .split(let axis, let children, _)? = Self.node(at: id.path[...], in: root),
-            id.index >= 0, id.index < children.count - 1
-        else { return false }
-        return moveDivider(
-            id, to: requested, mode: mode, length: length,
-            minimumBefore: Self.minimumLength(of: children[id.index], along: axis, minimumSize: minimumSize, gap: gap),
-            minimumAfter: Self.minimumLength(of: children[id.index + 1], along: axis, minimumSize: minimumSize, gap: gap))
+        moveDivider(id, to: requested, mode: mode, length: length) { axis, before, after in
+            (
+                Self.minimumLength(of: before, along: axis, minimumSize: minimumSize, gap: gap),
+                Self.minimumLength(of: after, along: axis, minimumSize: minimumSize, gap: gap)
+            )
+        }
     }
 
     /// The same, with one minimum length in points for both neighbours.
@@ -254,17 +250,26 @@ public struct PaneLayout: Hashable, Sendable {
     public mutating func moveDivider(
         _ id: DividerID, to requested: Double, mode: ResizeMode, length: Double, minimumLength: Double
     ) -> Bool {
-        moveDivider(
-            id, to: requested, mode: mode, length: length, minimumBefore: minimumLength, minimumAfter: minimumLength)
+        moveDivider(id, to: requested, mode: mode, length: length) { _, _, _ in (minimumLength, minimumLength) }
     }
 
     mutating func moveDivider(
         _ id: DividerID, to requested: Double, mode: ResizeMode, length: Double,
         minimumBefore: Double, minimumAfter: Double
     ) -> Bool {
+        moveDivider(id, to: requested, mode: mode, length: length) { _, _, _ in (minimumBefore, minimumAfter) }
+    }
+
+    /// The one move all of them make, given the minimum lengths in points of
+    /// the two panes either side of the divider.
+    private mutating func moveDivider(
+        _ id: DividerID, to requested: Double, mode: ResizeMode, length: Double,
+        minimums: (SplitAxis, PaneNode, PaneNode) -> (before: Double, after: Double)
+    ) -> Bool {
         guard case .split(let axis, let children, var fractions)? = Self.node(at: id.path[...], in: root),
             id.index >= 0, id.index < children.count - 1
         else { return false }
+        let (minimumBefore, minimumAfter) = minimums(axis, children[id.index], children[id.index + 1])
         let before = fractions[..<id.index].reduce(0, +)
         let current = before + fractions[id.index]
         let after = current + fractions[id.index + 1]
@@ -383,7 +388,7 @@ public struct PaneLayout: Hashable, Sendable {
     }
 
     /// How far from a pane's middle, as a share of its size, still counts as its
-    /// center — the middle fifth-and-a-bit each way, as editors' drop zones do.
+    /// center: a fifth each way, as editors' drop zones do.
     public static let centerReach = 0.2
 
     /// The zone of `rect` that `point` falls in: its center, or else the edge

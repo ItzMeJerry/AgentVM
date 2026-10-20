@@ -13,6 +13,7 @@
 
 import AgentVMKit
 import Foundation
+import Observation
 
 /// How busy this Mac was at one moment, 0…1.
 struct HostCPUPoint: Identifiable, Equatable {
@@ -21,8 +22,11 @@ struct HostCPUPoint: Identifiable, Equatable {
     let share: Double
 }
 
+/// Observable, so each card redraws for its own figures: the disk cards
+/// every 20 seconds, when those are read and have changed, not every round.
 @MainActor
-final class ResourceMonitor: ObservableObject {
+@Observable
+final class ResourceMonitor {
     /// How often disk use and storage are read while the dashboard is up.
     private static let slowInterval: TimeInterval = 20
     /// Ten minutes of each instance, for its own page.
@@ -32,23 +36,23 @@ final class ResourceMonitor: ObservableObject {
     /// However often readings come, no history grows past this.
     private static let pointLimit = 2_000
 
-    @Published private(set) var histories: [String: ResourceHistory] = [:]
-    @Published private(set) var totals: [ResourceTotals] = []
+    private(set) var histories: [String: ResourceHistory] = [:]
+    private(set) var totals: [ResourceTotals] = []
     /// What each instance's whole bundle takes on this Mac.
-    @Published private(set) var diskUsage: [String: UInt64] = [:]
+    private(set) var diskUsage: [String: UInt64] = [:]
     /// How full each instance's own disk is, as `df` inside it would say.
-    @Published private(set) var rootDisks: [String: InstanceDisk] = [:]
-    @Published private(set) var storage: StorageSummary?
-    @Published private(set) var hostCPU: [HostCPUPoint] = []
-    @Published private(set) var hostMemoryInUse: UInt64?
-    @Published private(set) var memoryPressure: MemoryPressure?
-    @Published private(set) var hostDisk: DiskSpace?
+    private(set) var rootDisks: [String: InstanceDisk] = [:]
+    private(set) var storage: StorageSummary?
+    private(set) var hostCPU: [HostCPUPoint] = []
+    private(set) var hostMemoryInUse: UInt64?
+    private(set) var memoryPressure: MemoryPressure?
+    private(set) var hostDisk: DiskSpace?
 
-    private var hostTicks: HostCPUTicks?
-    private var task: Task<Void, Never>?
-    private var watchers = 0
-    private var dashboardVisible = false
-    private var lastSlowReading = Date.distantPast
+    @ObservationIgnored private var hostTicks: HostCPUTicks?
+    @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var watchers = 0
+    @ObservationIgnored private var dashboardVisible = false
+    @ObservationIgnored private var lastSlowReading = Date.distantPast
 
     /// Starts sampling; each `begin` needs an `end`.
     func begin(_ model: AppModel) {
@@ -93,13 +97,30 @@ final class ResourceMonitor: ObservableObject {
         dashboardVisible = false
     }
 
+    /// An instance's page is on screen: its bundle's size, which only the
+    /// page shows, now rather than at the next round.
+    func pageAppeared(_ model: AppModel) {
+        Task { await readSlowly(model) }
+    }
+
     private func sample(_ model: AppModel) async {
         let running = model.instances.filter(\.isRunning)
         let gap = SamplingInterval.maximumGap(for: model.samplingInterval)
+        // All at once: each is a round trip to the guest and back, and a
+        // round takes as long as the slowest rather than all of them added up.
+        let engine = model.engine
+        let samples = await withTaskGroup(of: (String, ResourceSample?).self) { group in
+            for instance in running {
+                group.addTask { (instance.fullName, try? await engine.resourceSample(for: instance.fullName)) }
+            }
+            var samples: [String: ResourceSample] = [:]
+            for await (name, sample) in group { samples[name] = sample }
+            return samples
+        }
         var histories = self.histories
         var latest: [ResourcePoint] = []
         for instance in running {
-            guard let sample = try? await model.engine.resourceSample(for: instance.fullName) else { continue }
+            guard let sample = samples[instance.fullName] else { continue }
             var history =
                 histories[instance.fullName]
                 ?? ResourceHistory(capacity: Self.pointLimit, span: Self.instanceSpan, maximumGap: gap)
@@ -149,19 +170,25 @@ final class ResourceMonitor: ObservableObject {
 
     private func readSlowly(_ model: AppModel) async {
         lastSlowReading = Date()
-        var bundles: [String: UInt64] = [:]
+        let engine = model.engine
         var disks: [String: InstanceDisk] = [:]
         for instance in model.instances {
-            if let bytes = try? await model.engine.diskUsage(of: instance.fullName) { bundles[instance.fullName] = bytes }
-            if let disk = await model.engine.rootDisk(of: instance.fullName) { disks[instance.fullName] = disk }
+            if let disk = await engine.rootDisk(of: instance.fullName) { disks[instance.fullName] = disk }
         }
-        diskUsage = bundles
         rootDisks = disks
-        storage = try? await model.engine.storageSummary()
-        // The volume the container service keeps its images and disks on.
+        // A bundle's size is shown on its instance's page and nowhere else.
+        if let page = model.dashboardInstance, let bytes = try? await engine.diskUsage(of: page) {
+            diskUsage = [page: bytes]
+        } else {
+            diskUsage = [:]
+        }
+        storage = try? await engine.storageSummary()
+        // The volume the container service keeps its images and disks on. Its
+        // space free for important use takes some 15 ms to work out: not on
+        // the main thread.
         let root = model.daemon?.appRoot.map { URL(filePath: $0) }
-        hostDisk =
-            root.flatMap(HostResources.diskSpace(at:))
-            ?? HostResources.diskSpace(at: URL(filePath: NSHomeDirectory()))
+        hostDisk = await Task.detached {
+            root.flatMap(HostResources.diskSpace(at:)) ?? HostResources.diskSpace(at: URL(filePath: NSHomeDirectory()))
+        }.value
     }
 }

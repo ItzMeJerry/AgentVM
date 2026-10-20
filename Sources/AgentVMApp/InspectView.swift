@@ -11,7 +11,7 @@ import AgentVMKit
 import SwiftUI
 
 struct InspectView: View {
-    @EnvironmentObject private var model: AppModel
+    @Environment(AppModel.self) private var model
     let instance: AgentVMInstance
 
     var body: some View {
@@ -86,15 +86,15 @@ struct InspectView: View {
 
             Section {
                 ForEach(instance.ports) { port in
-                        LabeledContent {
-                            Text(port.spec)
-                                .font(.callout.monospaced())
-                                .textSelection(.enabled)
-                        } label: {
-                            Label(
-                                port.isLoopback ? "This Mac only" : "Your network",
-                                systemImage: port.isLoopback ? "laptopcomputer" : "network")
-                        }
+                    LabeledContent {
+                        Text(port.spec)
+                            .font(.callout.monospaced())
+                            .textSelection(.enabled)
+                    } label: {
+                        Label(
+                            port.isLoopback ? "This Mac only" : "Your network",
+                            systemImage: port.isLoopback ? "laptopcomputer" : "network")
+                    }
                 }
                 // One row: what's forwarded, and the way to change it.
                 LabeledContent {
@@ -121,7 +121,9 @@ struct InspectView: View {
                     Text("No host folders are mounted: the guest sees only its own image.")
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(instance.mounts) { mount in
+                    // By position: the order is the container's own, and
+                    // two mounts can share a guest path.
+                    ForEach(Array(instance.mounts.enumerated()), id: \.offset) { _, mount in
                         LabeledContent {
                             Text(mount.source)
                                 .lineLimit(1)

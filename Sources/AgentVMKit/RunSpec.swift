@@ -77,15 +77,13 @@ public struct MountSpec: Identifiable, Sendable, Equatable, Hashable {
 }
 
 /// Which lifetime rules an instance follows. Recorded as the `agentvm.mode` label.
-public enum AgentVMMode: String, Sendable, CaseIterable, Identifiable, Codable {
+public enum AgentVMMode: String, Sendable, CaseIterable {
     /// No command: the main process is a keepalive loop that never exits, so the
     /// container runs until you stop it. Shell sessions are independent.
     case instance
     /// A command: the command *is* the main process, and the container stops
     /// when it finishes.
     case task
-
-    public var id: String { rawValue }
 
     public var summary: String {
         switch self {
@@ -111,8 +109,6 @@ public struct RunSpec: Sendable {
     public var useRegistry: Bool = true
     public var cpus: Int?
     public var memory: String?
-    /// Architecture of a multi-arch image (default: the host's).
-    public var arch: String?
     public var rosetta: Bool = false
     /// One-shot: remove the instance when its command exits (tasks only).
     public var removeOnExit: Bool = false

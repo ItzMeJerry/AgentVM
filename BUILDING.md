@@ -63,9 +63,9 @@ your checkout marks them executable.
 | --- | --- |
 | `Scripts/doctor.sh` | Checks macOS, architecture, disk, toolchain, macro plugin and the daemon, and says how to fix whatever is missing. `--quiet` prints only problems. |
 | `Scripts/build-app.sh [debug\|release]` | Builds the executable and wraps it in `.build/AgentVM.app`. Release by default. |
-| `Scripts/test.sh` | Runs the AgentVMKit test suite. Takes any `swift test` arguments. |
+| `Scripts/test.sh` | Runs the unit tests, both targets'. Takes any `swift test` arguments. |
 | `Scripts/clean.sh [--all]` | Drops compiled output. `--all` drops the checkouts too. |
-| `Scripts/toolchain.sh` | Sourced by the others; locates the macro plugins. Not run directly. |
+| `Scripts/toolchain.sh` | Sourced by the others; finds the macro plugins and the Metal compiler. Not run directly. |
 
 `build-app.sh` runs `doctor.sh --quiet` first, so a machine that can't build
 says why in a second rather than in ten minutes. `AGENTVM_SKIP_DOCTOR=1` skips it.
@@ -87,31 +87,20 @@ bash Scripts/test.sh
 bash Scripts/test.sh --filter PortMapping     # one suite
 ```
 
-The tests need no daemon, no VM and no network. They cover the logic that
-decides what reaches the system: port-spec parsing and validation, the config
-file, the env registry, mount refusals and name rules. Everything they touch is
-a temporary directory — `~/.config/agentvm` is never read or written, and no
-container is created.
-
-### The integration suite
-
-One suite does talk to the daemon: it pulls an image, boots a real VM, runs a
-command in it, edits its ports and deletes it. It is skipped unless you ask:
-
-```sh
-AGENTVM_INTEGRATION=1 bash Scripts/test.sh --filter Integration
-```
-
-It needs `container system start` and a network for the image pull, and takes a
-few minutes. Everything it creates is named under the **`agentvmit-`** prefix, never
-`agentvm-`, so it cannot see or remove an instance you actually use, and it deletes
-its own instance at the end even when a test fails.
+The tests need no daemon, no VM and no network; `~/.config/agentvm` is never
+read or written, and no container is created. The one suite that does talk to
+the daemon is skipped unless you ask for it. [CONTRIBUTING.md](CONTRIBUTING.md#tests)
+says what each covers and how to run that one.
 
 ## The app bundle
 
 `.build/AgentVM.app` is a plain, **unsandboxed** macOS app, ad-hoc signed. That is
 deliberate: it talks to `com.apple.container.apiserver` over XPC and bind-mounts
 directories you pick, and a sandboxed app can do neither.
+
+A release build is stripped of its symbols, which halves the app. They're kept
+in `.build/release/agentvm-gui.dSYM`, which still symbolicates a crash report
+from it; a debug build keeps them in place.
 
 Ad-hoc signing is enough to run it locally. To hand it to someone else you need
 your own Developer ID signature and notarization; this repo ships no signing
@@ -159,7 +148,7 @@ Harmless. It comes from building against a CLT toolchain and does not affect
 the result.
 
 **The app launches but every instance action fails**
-The daemon isn't running. `container system start`, then use **Refresh** in the
+The daemon isn't running. `container system start`, then use **Refresh Now** in the
 app's sidebar menu. The status light in the sidebar reflects
 `ClientHealthCheck.ping`.
 

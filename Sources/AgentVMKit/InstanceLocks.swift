@@ -57,7 +57,7 @@ public struct InstanceLocks: Sendable {
             })
     }
 
-    public func isLocked(_ fullName: String) throws -> Bool {
+    func isLocked(_ fullName: String) throws -> Bool {
         try names().contains(fullName)
     }
 

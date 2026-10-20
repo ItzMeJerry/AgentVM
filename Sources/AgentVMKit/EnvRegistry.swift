@@ -39,7 +39,7 @@ public struct EnvRegistry: Sendable {
         try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate] as? Date
     }
 
-    public func ensureFile() throws {
+    func ensureFile() throws {
         try FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         if !exists {
@@ -90,5 +90,5 @@ public struct EnvRegistry: Sendable {
         try save(load().filter { $0.key != key })
     }
 
-    public var hasEntries: Bool { !load().isEmpty }
+    var hasEntries: Bool { !load().isEmpty }
 }

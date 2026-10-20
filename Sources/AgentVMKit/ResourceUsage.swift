@@ -241,13 +241,11 @@ public struct ResourceTotals: Sendable, Equatable, Identifiable {
 public struct StorageSummary: Sendable, Equatable {
     public struct Kind: Sendable, Equatable {
         public var count: Int
-        public var active: Int
         public var bytes: UInt64
         public var reclaimable: UInt64
 
-        public init(count: Int, active: Int, bytes: UInt64, reclaimable: UInt64) {
+        public init(count: Int, bytes: UInt64, reclaimable: UInt64) {
             self.count = count
-            self.active = active
             self.bytes = bytes
             self.reclaimable = reclaimable
         }

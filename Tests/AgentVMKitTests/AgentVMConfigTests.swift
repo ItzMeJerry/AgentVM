@@ -20,11 +20,7 @@ struct AgentVMConfigTests {
     /// A directory that goes away with the test, so nothing leaks into $HOME.
     @discardableResult
     private func withTemporaryConfig<T>(_ body: (URL) throws -> T) throws -> T {
-        let directory = URL(filePath: NSTemporaryDirectory())
-            .appending(path: "agentvm-tests-\(UUID().uuidString)", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        return try body(directory.appending(path: "config", directoryHint: .notDirectory))
+        try withTemporaryDirectory { try body($0.appending(path: "config", directoryHint: .notDirectory)) }
     }
 
     private func write(_ text: String, to url: URL) throws {
@@ -171,13 +167,25 @@ struct AgentVMConfigTests {
         }
     }
 
-    @Test("A prefix of the wrong shape is refused", arguments: [
-        "has spaces", "-leading-dash", "", "AgentVM/", "AgentVM:",
+    @Test("A prefix of the wrong shape is refused, with a warning", arguments: [
+        "has spaces", "-leading-dash", "AgentVM/", "AgentVM:",
     ])
     func rejectsBadNamePrefix(_ prefix: String) throws {
         try withTemporaryConfig { url in
             try write("NAME_PREFIX=\(prefix)", to: url)
-            #expect(try AgentVMConfig.load(from: url).namePrefix == "agentvm-")
+            let config = try AgentVMConfig.load(from: url)
+            #expect(config.namePrefix == "agentvm-")
+            #expect(config.warnings.contains { $0.contains("NAME_PREFIX") })
+        }
+    }
+
+    @Test("An empty prefix means the default, which is no mistake to warn about")
+    func emptyNamePrefix() throws {
+        try withTemporaryConfig { url in
+            try write("NAME_PREFIX=", to: url)
+            let config = try AgentVMConfig.load(from: url)
+            #expect(config.namePrefix == "agentvm-")
+            #expect(config.warnings.isEmpty)
         }
     }
 
@@ -225,11 +233,9 @@ struct AgentVMConfigTests {
 
     // MARK: - Names
 
-    @Test("Short and full names convert both ways")
+    @Test("A full name gives its short name, and a foreign one is left alone")
     func nameConversion() {
         let config = AgentVMConfig()
-        #expect(config.fullName("coder") == "agentvm-coder")
-        #expect(config.fullName("agentvm-coder") == "agentvm-coder", "an already-prefixed name passes through")
         #expect(config.shortName("agentvm-coder") == "coder")
         #expect(config.shortName("other") == "other", "a foreign name is left alone")
     }
@@ -263,7 +269,6 @@ struct AgentVMConfigTests {
         #expect(NetPosture(rawValue: "killswitch") == nil, "the file spells it 'none'")
         for posture in NetPosture.allCases {
             #expect(!posture.summary.isEmpty)
-            #expect(!posture.label.isEmpty)
         }
     }
 
@@ -271,16 +276,15 @@ struct AgentVMConfigTests {
 
     /// A fake home with the given files under it, removed afterwards.
     private func withHome(_ files: [String: String], _ body: (URL) throws -> Void) throws {
-        let home = URL(filePath: NSTemporaryDirectory())
-            .appending(path: "agentvm-home-\(UUID().uuidString)", directoryHint: .isDirectory)
-        defer { try? FileManager.default.removeItem(at: home) }
-        for (path, text) in files {
-            let url = home.appending(path: path, directoryHint: .notDirectory)
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try write(text, to: url)
+        try withTemporaryDirectory { home in
+            for (path, text) in files {
+                let url = home.appending(path: path, directoryHint: .notDirectory)
+                try FileManager.default.createDirectory(
+                    at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try write(text, to: url)
+            }
+            try body(home)
         }
-        try body(home)
     }
 
     private func read(_ path: String, in home: URL) -> String? {

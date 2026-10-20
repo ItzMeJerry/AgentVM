@@ -96,8 +96,7 @@ extension PaneLayout {
     /// `sessions` fill the remaining zones in order; zones still left are empty.
     /// Sessions beyond the zones aren't shown (they stay tabs).
     public init(
-        template: LayoutTemplate, sessions: [UUID], focus: UUID? = nil, focusZone: Int = 0,
-        makeEmptyID: () -> UUID = UUID.init
+        template: LayoutTemplate, sessions: [UUID], focus: UUID? = nil, focusZone: Int = 0
     ) {
         var seen = Set<UUID>()
         var queue = sessions.filter { $0 != focus && seen.insert($0).inserted }
@@ -109,7 +108,7 @@ extension PaneLayout {
             } else if !queue.isEmpty {
                 contents.append(.session(queue.removeFirst()))
             } else {
-                contents.append(.empty(makeEmptyID()))
+                contents.append(.empty(UUID()))
             }
         }
         self.init(root: template.node(contents), focused: contents[zone])
@@ -119,13 +118,12 @@ extension PaneLayout {
     /// `focusZone`. Sessions on screen keep priority over hidden tabs, in
     /// reading order, then the rest in `tabOrder`.
     public mutating func apply(
-        _ template: LayoutTemplate, focusZone: Int = 0, tabOrder: [UUID], makeEmptyID: () -> UUID = UUID.init
+        _ template: LayoutTemplate, focusZone: Int = 0, tabOrder: [UUID]
     ) {
         let onScreen = sessions
         let hidden = tabOrder.filter { !onScreen.contains($0) }
         self = PaneLayout(
-            template: template, sessions: onScreen + hidden, focus: focusedSession, focusZone: focusZone,
-            makeEmptyID: makeEmptyID)
+            template: template, sessions: onScreen + hidden, focus: focusedSession, focusZone: focusZone)
     }
 
     /// The template this layout currently has the exact shape of, if any.
